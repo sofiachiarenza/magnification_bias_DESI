@@ -139,7 +139,33 @@ def select_elg(cat, field='south'):
     mask_elglop &= gmag - rmag < -1.2*(rmag - zmag) + 1.3
 
     return mask_elglop, mask_elgvlo
+
+def select_elg_notqso(cat, field='south'):
+    mask_elglop,mask_elgvlo =  select_elg(cat)
+    mask_elg = mask_elglop | mask_elgvlo
+
+    if field=='south':
+        southbool = True
+    else:
+        southbool = False
     
+    isqso = isQSO_randomforest(cat['FLUX_G']*10**(0.4*3.214*cat['EBV']),
+        cat['FLUX_R']*10**(0.4*2.165*cat['EBV']),
+        cat['FLUX_Z']*10**(0.4*1.211*cat['EBV']),
+        cat['MASKBITS'],
+        cat['FLUX_W1']*10**(0.4*0.184*cat['EBV']),
+        cat['FLUX_W2']*10**(0.4*0.113*cat['EBV']),
+        cat['MORPHTYPE'],
+        cat['NOBS_G'],
+        cat['NOBS_R'],
+        cat['NOBS_Z'],
+        np.ones_like(cat['NOBS_Z']).astype('bool'),
+        cat['RA'],
+        cat['DEC'],
+        south=southbool) # I guess south can be either True or False
+    
+    return mask_elg & ~isqso.astype('bool')
+
     
 def select_elg_lopnotqso(cat, field='south'):
     mask_elglop =  select_elg(cat)[0]

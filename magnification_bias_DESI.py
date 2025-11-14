@@ -112,13 +112,13 @@ def apply_lensing(data,  kappa,  galaxy_type, config, verbose=False ):
     elif(galaxy_type == "BGS_BRIGHT"):
         fiber_column = "FIBERFLUX_R"
         fiber_tot_column = "FIBERTOTFLUX_R"
-    elif(galaxy_type == 'ELG_LOPnotqso'):
+    elif(galaxy_type[:3] == 'ELG'):
         fiber_column = "FIBERFLUX_G"
     else:
         raise ValueError(f"galaxy_type {galaxy_type} not recognized")
     
     #only magnifying the galaxy not the surrounding light considered for FIBERTOTFLUX
-    if galaxy_type != 'ELG_LOPnotqso':
+    if galaxy_type[:3] != 'ELG':
         diff_fibertot_fiber = data_mag[fiber_tot_column] - data_mag[fiber_column]
 
 
@@ -176,7 +176,7 @@ def apply_lensing(data,  kappa,  galaxy_type, config, verbose=False ):
 
     # lensing the fiber fluxes
     data_mag[fiber_column] *= (1. +(2.- fiber_correction)*kappa)
-    if galaxy_type != 'ELG_LOPnotqso':
+    if galaxy_type[:3] != 'ELG':
         data_mag[fiber_tot_column] =  diff_fibertot_fiber + data_mag[fiber_column]
 
     #lensing the secondary properties
