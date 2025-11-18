@@ -4,6 +4,24 @@ import healpy as hp
 from astropy.table import Table, join, vstack, Column
 from astropy.io import fits
 import re
+import fitsio
+
+def get_FSF_loa(indata,fsf_cols,fsf_dir='/dvs_ro/cfs/cdirs/desi/vac/dr2/fastspecfit/loa/v1.0/catalogs/',prog='bright'):
+    #add the fsf_cols to the existing data based on a TARGETID match
+    #works with the data model that is new as of loa
+    fsl = []
+    if not "TARGETID" in fsf_cols:
+        fsf_cols = ["TARGETID"]+fsf_cols
+    for hp in range(0,12):
+        fsi = fitsio.read(fsf_dir+'fastspec-loa-main-bright-nside1-hp'+str(hp).zfill(2)+'.fits',ext='SPECPHOT',columns = fsf_cols)
+        fsl.append(fsi)
+    fs = np.concatenate(fsl)
+    del fsl
+    ol = len(indata)
+    indata = join(indata,fs,keys=['TARGETID']) #note, anything missing from fastspecfit will now be missing
+    del fs
+    print('length before/after fastspecfit join '+str(ol)+' '+str(len(indata)))
+    return indata
 
 class Version:
     def __init__(self, version):
@@ -154,7 +172,9 @@ def read_table(filename, columns=None, memmap=True, tabulatedbool=False):
             len_before = len(data)
             data = join(data,tab_full_HPmapcut,keys="TARGETID",join_type="inner")
             len_after = len(data)
-            assert len_before==len_after, f"Length mismatch: {len_before} vs {len_after}, full_HPmapcut file {len(tab_full_HPmapcut)}"
+            if not len_before==len_after:
+                print(f"Length mismatch: {len_before} vs {len_after}, full_HPmapcut file {len(tab_full_HPmapcut)}")
+                print(f"Number of missing TARGETIDs: {len_before-len_after}")
             print("Matching weights from clustering_NGC and clustering_SGC")
             #tab_NGC = Table(fits.open(filename.replace("_clustering","_NGC_clustering"),columns=['TARGETID','WEIGHT_FKP'])[1].data)
             #tab_SGC = Table(fits.open(filename.replace("_clustering","_SGC_clustering"),columns=['TARGETID','WEIGHT_FKP'])[1].data)
@@ -183,7 +203,7 @@ def read_table(filename, columns=None, memmap=True, tabulatedbool=False):
                     axis_ratio[sel] = (1 + ellipticity) / (1 - ellipticity)
                     sersic[sel] = joined_cat['SERSIC']
                     gaia_gmag[sel] = joined_cat['GAIA_PHOT_G_MEAN_MAG']
-                    print(ppix)
+                    # print(ppix)
                 c1 = Column(axis_ratio, name='AXIS_RATIO')
                 c2 = Column(sersic, name='SERSIC')
                 c3 = Column(gaia_gmag,name='GAIA_GMAG')
@@ -193,20 +213,26 @@ def read_table(filename, columns=None, memmap=True, tabulatedbool=False):
 
         else:
             # assign via assign_systematic_property function
-            if "WEIGHT" in not_available_columns:
-                pass
-            else:
-                print(f"Assigning {not_available_columns} from healpix maps")
-                galaxy_type = os.path.basename(filename).split("_")[0]
-                if galaxy_type == 'ELG':
-                    galaxy_type = 'ELG_LOPnotqso'
-                if galaxy_type == "BGS":
-                    galaxy_type = "BGS_BRIGHT"
-                version = filename.split("/v1.")[1]
-                version = version.split("/")[0]
-                version = Version("v1."+version)
-                for col in not_available_columns:
-                    data[col] = assign_systematic_property(data,galaxy_type,col,version)
+            # if "WEIGHT" in not_available_columns:
+            #     pass
+            # else:
+            print(f"Assigning {not_available_columns} from healpix maps")
+            galaxy_type = os.path.basename(filename).split("_")[0]
+            if galaxy_type == 'ELG':
+                galaxy_type = 'ELG_LOPnotqso'
+            if galaxy_type == "BGS":
+                galaxy_type = "BGS_BRIGHT"
+            # version = filename.split("/v1.")[1]
+            # version = version.split("/")[0]
+            # version = Version("v1."+version)
+            version = Version("v1.5")
+            for col in not_available_columns:
+                if "WEIGHT" in col:
+                    continue
+                if "ABSMAG" in col:
+                    data = get_FSF_loa(data,[col],prog='bright' if galaxy_type == "BGS_BRIGHT" else 'dark')
+                    continue
+                data[col] = assign_systematic_property(data,galaxy_type,col,version)
     assert not is_table_masked(data), f"Table {filename} is masked"
     # remove all columns that were requested
     for key in requests.keys():

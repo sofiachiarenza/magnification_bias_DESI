@@ -35,7 +35,7 @@ def load_survey_data(galaxy_type,config,zmin=None,zmax=None,debug=False):
 
     # load our catalogue that contains the clean sample
     load_columns = ["TARGETID","Z"] + required_columns
-    if (galaxy_type == "BGS_BRIGHT") and ('Y1' in fpath_lss):
+    if (galaxy_type[:3] == "BGS"):
         load_columns += ["ABSMAG01_SDSS_R"]
     if config['general']['fiber_mag_lensing'] == 'Tabulated':
         tabulatedbool=True
@@ -90,18 +90,22 @@ def apply_lensing(data,  kappa,  galaxy_type, config, verbose=False ):
     
     #for both LRG and BGS_BRIGHT need 'FLUX_G', 'FLUX_R', 'FLUX_Z', 'FLUX_W1'
     #note: want to apply lensing after dereddening but for flux deredenning is multiplicative just like lensing so they are interchangable.
-    columns_to_magnify = ['FLUX_G', 'FLUX_R', 'FLUX_Z', 'FLUX_W1']
+    columns_to_magnify = ['FLUX_G', 'FLUX_R', 'FLUX_Z', 'FLUX_W1','FLUX_W2']
     for column_to_magnify in columns_to_magnify:
-        data_mag[column_to_magnify] *= (1.+2.*kappa)
+        if column_to_magnify in data_mag.colnames:
+            data_mag[column_to_magnify] *= (1.+2.*kappa)
+        else:
+            print(f"Column {column_to_magnify} not found in data_mag.colnames. Skipping magnification.")
 
     #absolute magnitude for BGS
     if(galaxy_type == "BGS_BRIGHT"):
         #absolute mag calculation commutes with additive change in the aparent magnitude calculation
-        if "DA2" not in config["general"]["full_lss_path"]:
-            data_mag["ABSMAG01_SDSS_R"] += - 2.5 * np.log10(1.+2.*kappa)
+        data_mag["ABSMAG01_SDSS_R"] += - 2.5 * np.log10(1.+2.*kappa)
         #sign: for positive kappa galaxy gets brighter -> aparent magnitude gets smaller
 
-
+    if galaxy_type == "QSO":
+        # QSO does not require fiber mag correction
+        return data_mag
 
     #the additional Fiber fluxes are more nuianced. Need size information for the galaxies to get an accurate estiamte,
     #e.g. a radius 
@@ -109,7 +113,7 @@ def apply_lensing(data,  kappa,  galaxy_type, config, verbose=False ):
     if(galaxy_type == "LRG"):
         fiber_column = "FIBERFLUX_Z"
         fiber_tot_column = "FIBERTOTFLUX_Z"
-    elif(galaxy_type == "BGS_BRIGHT"):
+    elif(galaxy_type.split("-")[0][:3] == "BGS"):
         fiber_column = "FIBERFLUX_R"
         fiber_tot_column = "FIBERTOTFLUX_R"
     elif(galaxy_type[:3] == 'ELG'):
@@ -400,7 +404,7 @@ def fit_linear(xdats, ydats, sigmas):
     n_bins = len(ydats)
     dof = n_bins - len(res)#(ii_max - ii_min - len(res))
     red_chi2 =  chi2 / dof
-    print(chi2, red_chi2)
+    print("chi2, red_chi2: ", chi2, red_chi2)
     fit["chi2"] = chi2
     fit["red_chi2"] = red_chi2
     from scipy import stats
