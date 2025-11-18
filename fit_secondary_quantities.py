@@ -64,8 +64,13 @@ def fit_secondary_quantities(config):
         magnitude_mask = apply_magnitude_cuts(lss_tab, galaxy_type, config, mag_col="ABSMAG01_SDSS_R", zcol="Z_not4clus")
         lss_tab = lss_tab[magnitude_mask]
 
-        fit_xval = config['secondary_properties'][f"Xval_{galaxy_type}"]
-        fit_yvals = config['secondary_properties'][f"relevant_secondary_properties_{galaxy_type}"].strip().split(',')
+        try:
+            fit_xval = config['secondary_properties'][f"Xval_{galaxy_type}"]
+            fit_yvals = config['secondary_properties'][f"relevant_secondary_properties_{galaxy_type}"].strip().split(',')
+        except Exception as e:
+            print(f"Could not find the fit_xval and fit_yvals for {galaxy_type}. Error: {e}")
+            print(f"Skipping {galaxy_type}.")
+            continue
 
         for fit_yval in fit_yvals:
             mask = np.isfinite(lss_tab[fit_xval]) & np.isfinite(lss_tab[fit_yval])

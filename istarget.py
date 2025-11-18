@@ -12,6 +12,8 @@ def get_required_columns(galaxy_type):
         return ['TARGETID', 'PHOTSYS', 'RA', 'DEC', 'FLUX_G', 'FLUX_R', 'FLUX_Z', 'FLUX_W1', 'FLUX_IVAR_R', 'FLUX_IVAR_Z', 'FLUX_IVAR_W1', 'FIBERFLUX_Z', 'FIBERTOTFLUX_Z', 'EBV', 'MASKBITS', 'NOBS_G', 'NOBS_R', 'NOBS_Z', 'SHAPE_R', 'TSNR2_ELG', 'ZWARN', 'DELTACHI2', 'WEIGHT', 'WEIGHT_FKP','MORPHTYPE']
     elif galaxy_type[:3]=="ELG":
         return ['TARGETID', 'PHOTSYS', 'RA', 'DEC', 'FLUX_G', 'FLUX_R', 'FLUX_Z', 'FLUX_W1','FLUX_W2','FLUX_IVAR_G', 'FLUX_IVAR_R', 'FLUX_IVAR_Z', 'FLUX_IVAR_W1', 'FIBERFLUX_G',  'EBV', 'MASKBITS', 'NOBS_G', 'NOBS_R', 'NOBS_Z', 'SHAPE_R', 'TSNR2_ELG', 'ZWARN', 'o2c', 'WEIGHT', 'WEIGHT_FKP','MORPHTYPE']
+    elif galaxy_type[:3].upper()=="QSO":
+        return ['TARGETID', 'PHOTSYS', 'RA', 'DEC', 'FLUX_G', 'FLUX_R', 'FLUX_Z', 'FLUX_W1', 'FLUX_W2', 'FLUX_IVAR_G', 'FLUX_IVAR_R', 'FLUX_IVAR_Z', 'FLUX_IVAR_W1', 'FLUX_IVAR_W2', 'EBV', 'MASKBITS', 'MORPHTYPE', 'NOBS_G', 'NOBS_R', 'NOBS_Z', 'SHAPE_R', 'TSNR2_QSO', 'ZWARN', 'DELTACHI2', 'WEIGHT', 'WEIGHT_FKP']
     else:
         raise NotImplementedError("galaxy_type {} not implemented".format(galaxy_type))
     
@@ -533,5 +535,34 @@ def select_elg_lopnotqso_individual_cuts(cat,field='south'):
     south=southbool) # I guess south can be either True or False
 	
     mask_tab.add_column(~isqso,name='remove quasars')
+
+    return mask_tab
+
+def select_qso(cat, field='south'):
+    southbool = (field == 'south')
+
+    isqso = isQSO_randomforest(cat['FLUX_G']*10**(0.4*3.214*cat['EBV']),
+    cat['FLUX_R']*10**(0.4*2.165*cat['EBV']),
+    cat['FLUX_Z']*10**(0.4*1.211*cat['EBV']),
+    cat['MASKBITS'],
+    cat['FLUX_W1']*10**(0.4*0.184*cat['EBV']),
+    cat['FLUX_W2']*10**(0.4*0.113*cat['EBV']),
+    cat['MORPHTYPE'],
+    cat['NOBS_G'],
+    cat['NOBS_R'],
+    cat['NOBS_Z'],
+    np.ones_like(cat['NOBS_Z']).astype('bool'),
+    cat['RA'],
+    cat['DEC'],
+    south=southbool) # I guess south can be either True or False
+
+    return isqso
+
+def select_qso_individual_cuts(cat, field='south'):
+    mask = select_qso(cat, field)
+
+    mask_tab = Table()
+
+    mask_tab.add_column(mask, name='QSO cuts')
 
     return mask_tab
