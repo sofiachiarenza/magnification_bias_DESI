@@ -29,7 +29,7 @@ def create_redshift_mask(reference_redshifts,z_bins_lens):
         return redshift_mask
 
 
-def get_magnitude_mask(data_table,magnitude_cuts,lens_bins,mag_col="ABSMAG01_SDSS_R",zcol="Z"):
+def get_magnitude_mask_dr1(data_table,magnitude_cuts,lens_bins,mag_col="ABSMAG01_SDSS_R",zcol="Z"):
     if magnitude_cuts is None:
         return np.ones(len(data_table),dtype=bool)
     redshift_mask = create_redshift_mask(data_table[zcol],lens_bins)
@@ -44,13 +44,42 @@ def get_magnitude_mask(data_table,magnitude_cuts,lens_bins,mag_col="ABSMAG01_SDS
     mask_magnitudes[redshift_mask] = (effective_magnitudes[redshift_mask] < magnitude_cuts[lens_zbins[redshift_mask]])
     return mask_magnitudes
 
+def get_magnitude_mask_dr2(data_table,magnitude_cuts,lens_bins,zcol="Z"):
+    if magnitude_cuts is None:
+        return np.ones(len(data_table),dtype=bool)
+    redshift_mask = create_redshift_mask(data_table[zcol],lens_bins)
+    lens_zbins = (np.digitize(data_table[zcol],lens_bins)-1).astype(int)
+    mask_magnitudes = np.zeros(len(data_table),dtype=bool)
+
+    from LSS.tabulated_cosmo import TabulatedDESI
+    cosmo = TabulatedDESI()
+    dis_dc = cosmo.comoving_radial_distance
+
+    dm = 5.*np.log10(dis_dc(data_table[zcol])*(1.+data_table[zcol])) + 25.
+    cfluxr = data_table['FLUX_R']/data_table['MW_TRANSMISSION_R']
+    r_dered = 22.5 - 2.5*np.log10(cfluxr)
+    abr = r_dered -dm
+    effective_magnitudes = abr
+    print("Effective magnitudes: min = {}, max = {}".format(np.min(effective_magnitudes),np.max(effective_magnitudes)))
+    # print("Raw magnitudes: min = {}, max = {}".format(np.min(data_table[mag_col]),np.max(data_table[mag_col])))
+    print("Magnitude cuts: min = {}, max = {}".format(np.min(magnitude_cuts),np.max(magnitude_cuts)))
+
+    mask_magnitudes[redshift_mask] = (effective_magnitudes[redshift_mask] < magnitude_cuts[lens_zbins[redshift_mask]])
+    return mask_magnitudes
+
+
 def apply_magnitude_cuts(data_table,galaxy_type,config,mag_col="ABSMAG01_SDSS_R",zcol="Z"):
     magnitude_cuts = config.get('general',f'absmag_cuts_{galaxy_type}',fallback=None)
-    print("Magnitude cuts: ",magnitude_cuts)
+    # print("Magnitude cuts: ",magnitude_cuts)
     if magnitude_cuts is not None:
         magnitude_cuts = -1.*np.array([abs(float(x)) for x in magnitude_cuts.split(',')])
     lens_bins = np.array([float(x) for x in config['general']['zbins_'+galaxy_type].split(',')])
-    mask_magnitudes = get_magnitude_mask(data_table,magnitude_cuts,lens_bins,mag_col=mag_col,zcol=zcol)
+    if "DA2" in config['general']['full_lss_path']:
+        mask_magnitudes = get_magnitude_mask_dr2(data_table,magnitude_cuts,lens_bins,zcol=zcol)
+    elif "Y1" in config['general']['full_lss_path']:
+        mask_magnitudes = get_magnitude_mask_dr1(data_table,magnitude_cuts,lens_bins,mag_col=mag_col,zcol=zcol)
+    else:
+        raise ValueError("Can not infer data release from full_lss_path in apply_magnitude_cuts. Allowed: [DA2,Y1]. Here: {}".format(config['general']['full_lss_path']))
     return mask_magnitudes
 
 def apply_tsnr_cut(data_table, galaxy_type):

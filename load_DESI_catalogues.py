@@ -216,7 +216,6 @@ def read_table(filename, columns=None, memmap=True, tabulatedbool=False):
             # if "WEIGHT" in not_available_columns:
             #     pass
             # else:
-            print(f"Assigning {not_available_columns} from healpix maps")
             galaxy_type = os.path.basename(filename).split("_")[0]
             if galaxy_type == 'ELG':
                 galaxy_type = 'ELG_LOPnotqso'
@@ -225,13 +224,16 @@ def read_table(filename, columns=None, memmap=True, tabulatedbool=False):
             # version = filename.split("/v1.")[1]
             # version = version.split("/")[0]
             # version = Version("v1."+version)
-            version = Version("v1.5")
             for col in not_available_columns:
                 if "WEIGHT" in col:
+                    print(f"Skipping {col} since it is a weight column")
                     continue
                 if "ABSMAG" in col:
+                    print(f"Assigning {col} from FSF_loa")
                     data = get_FSF_loa(data,[col],prog='bright' if galaxy_type == "BGS_BRIGHT" else 'dark')
                     continue
+                print(f"Assigning {col} from healpix maps")
+                version = Version("v1.5")
                 data[col] = assign_systematic_property(data,galaxy_type,col,version)
     assert not is_table_masked(data), f"Table {filename} is masked"
     # remove all columns that were requested
