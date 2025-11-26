@@ -18,6 +18,7 @@ from cuts import apply_photocuts_DESI,apply_magnitude_cuts,apply_secondary_cuts,
 import json
 from scipy.interpolate import RectBivariateSpline
 from scipy.interpolate import NearestNDInterpolator
+from make_region_selections import region_selection_functions
 
 
 
@@ -35,7 +36,7 @@ def load_survey_data(galaxy_type,config,zmin=None,zmax=None,debug=False):
 
     # load our catalogue that contains the clean sample
     load_columns = ["TARGETID","Z"] + required_columns
-    if (galaxy_type[:3] == "BGS"):
+    if (galaxy_type[:3] == "BGS") and ("Y1" in config['general']['full_lss_path']):
         load_columns += ["ABSMAG01_SDSS_R"]
     if config['general']['fiber_mag_lensing'] == 'Tabulated':
         tabulatedbool=True
@@ -69,6 +70,44 @@ def load_survey_data(galaxy_type,config,zmin=None,zmax=None,debug=False):
     return gal_tab[selection_mask & magnitude_mask]
 
 
+def apply_region_selection(data, region_name):
+    """Apply region selection to loaded catalogue data.
+    
+    Parameters
+    ----------
+    data : astropy.table.Table
+        Galaxy catalogue data
+    region_name : str
+        Region name from make_region_selections.region_selection_functions
+        
+    Returns
+    -------
+    data_filtered : astropy.table.Table
+        Filtered catalogue for the specified region
+    """
+    
+    # Handle 'all' region - no filtering
+    if region_name.lower() == 'all':
+        return data
+    
+    # Get the region selector function
+    if region_name not in region_selection_functions:
+        raise ValueError(f"Region '{region_name}' not found in region_selection_functions. "
+                        f"Available regions: {list(region_selection_functions.keys())}")
+    
+    region_selector = region_selection_functions[region_name]
+    
+    # region_selector returns None for 'all', or a function for other regions
+    if region_selector is None:
+        return data
+    
+    # Apply the region selection
+    region_mask = region_selector(data)
+    
+    print(f"Region '{region_name}': selected {np.sum(region_mask)}/{len(data)} galaxies")
+    
+    return data[region_mask]
+
 
 def apply_lensing(data,  kappa,  galaxy_type, config, verbose=False ):
     """Apply a small amount of lensing kappa to the observed magnitudes of the galaxy data. Combines all the functions to correctly apply the lensing for each type of magnitude in SDSS BOSS.
@@ -98,7 +137,7 @@ def apply_lensing(data,  kappa,  galaxy_type, config, verbose=False ):
             print(f"Column {column_to_magnify} not found in data_mag.colnames. Skipping magnification.")
 
     #absolute magnitude for BGS
-    if(galaxy_type == "BGS_BRIGHT"):
+    if(galaxy_type == "BGS_BRIGHT") and ("Y1" in config['general']['full_lss_path']):
         #absolute mag calculation commutes with additive change in the aparent magnitude calculation
         data_mag["ABSMAG01_SDSS_R"] += - 2.5 * np.log10(1.+2.*kappa)
         #sign: for positive kappa galaxy gets brighter -> aparent magnitude gets smaller
