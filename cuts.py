@@ -37,9 +37,9 @@ def get_magnitude_mask_dr1(data_table,magnitude_cuts,lens_bins,mag_col="ABSMAG01
     mask_magnitudes = np.zeros(len(data_table),dtype=bool)
     
     effective_magnitudes = data_table[mag_col] + 0.97 * data_table[zcol] - 0.095
-    print("Effective magnitudes: min = {}, max = {}".format(np.min(effective_magnitudes),np.max(effective_magnitudes)))
-    print("Raw magnitudes: min = {}, max = {}".format(np.min(data_table[mag_col]),np.max(data_table[mag_col])))
-    print("Magnitude cuts: min = {}, max = {}".format(np.min(magnitude_cuts),np.max(magnitude_cuts)))
+    # print("Effective magnitudes: min = {}, max = {}".format(np.min(effective_magnitudes),np.max(effective_magnitudes)))
+    # print("Raw magnitudes: min = {}, max = {}".format(np.min(data_table[mag_col]),np.max(data_table[mag_col])))
+    # print("Magnitude cuts: min = {}, max = {}".format(np.min(magnitude_cuts),np.max(magnitude_cuts)))
 
     mask_magnitudes[redshift_mask] = (effective_magnitudes[redshift_mask] < magnitude_cuts[lens_zbins[redshift_mask]])
     return mask_magnitudes
@@ -60,9 +60,9 @@ def get_magnitude_mask_dr2(data_table,magnitude_cuts,lens_bins,zcol="Z"):
     r_dered = 22.5 - 2.5*np.log10(cfluxr)
     abr = r_dered -dm
     effective_magnitudes = abr
-    print("Effective magnitudes: min = {}, max = {}".format(np.min(effective_magnitudes),np.max(effective_magnitudes)))
+    # print("Effective magnitudes: min = {}, max = {}".format(np.min(effective_magnitudes),np.max(effective_magnitudes)))
     # print("Raw magnitudes: min = {}, max = {}".format(np.min(data_table[mag_col]),np.max(data_table[mag_col])))
-    print("Magnitude cuts: min = {}, max = {}".format(np.min(magnitude_cuts),np.max(magnitude_cuts)))
+    # print("Magnitude cuts: min = {}, max = {}".format(np.min(magnitude_cuts),np.max(magnitude_cuts)))
 
     mask_magnitudes[redshift_mask] = (effective_magnitudes[redshift_mask] < magnitude_cuts[lens_zbins[redshift_mask]])
     return mask_magnitudes
@@ -74,12 +74,22 @@ def apply_magnitude_cuts(data_table,galaxy_type,config,mag_col="ABSMAG01_SDSS_R"
     if magnitude_cuts is not None:
         magnitude_cuts = -1.*np.array([abs(float(x)) for x in magnitude_cuts.split(',')])
     lens_bins = np.array([float(x) for x in config['general']['zbins_'+galaxy_type].split(',')])
-    if "DA2" in config['general']['full_lss_path']:
-        mask_magnitudes = get_magnitude_mask_dr2(data_table,magnitude_cuts,lens_bins,zcol=zcol)
-    elif "Y1" in config['general']['full_lss_path']:
-        mask_magnitudes = get_magnitude_mask_dr1(data_table,magnitude_cuts,lens_bins,mag_col=mag_col,zcol=zcol)
+    if f'magnitude_def_{galaxy_type}' in config['general']:
+        print(galaxy_type,config['general'][f'magnitude_def_{galaxy_type}'])
+        print(config['general'][f'magnitude_def_{galaxy_type}'].strip().upper())
+        print(config['general'][f'magnitude_def_{galaxy_type}'].strip().upper() == 'DA2')
+        print(config['general'][f'magnitude_def_{galaxy_type}'].strip().upper() == 'Y1')
+        if config['general'][f'magnitude_def_{galaxy_type}'].strip().upper() == 'DA2':
+            mask_magnitudes = get_magnitude_mask_dr2(data_table,magnitude_cuts,lens_bins,zcol=zcol)
+        elif config['general'][f'magnitude_def_{galaxy_type}'].strip().upper() == 'Y1':
+            mask_magnitudes = get_magnitude_mask_dr1(data_table,magnitude_cuts,lens_bins,mag_col=mag_col,zcol=zcol)
+        else:
+            raise ValueError("Can not infer data release from magnitude_def_{} in apply_magnitude_cuts. Allowed: [DA2,Y1]. Here: {}".format(galaxy_type,config['general'][f'magnitude_def_{galaxy_type}']))
     else:
-        raise ValueError("Can not infer data release from full_lss_path in apply_magnitude_cuts. Allowed: [DA2,Y1]. Here: {}".format(config['general']['full_lss_path']))
+        mask_magnitudes = np.ones(len(data_table),dtype=bool)
+        # print(f"No magnitude definition found for {galaxy_type}. Applying no magnitude cuts.")
+        if magnitude_cuts is not None:
+            raise ValueError(f"Magnitude cuts are not None for {galaxy_type} but no magnitude definition found in config.ini. Please check the config.ini file.")
     return mask_magnitudes
 
 def apply_tsnr_cut(data_table, galaxy_type):
