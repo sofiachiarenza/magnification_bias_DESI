@@ -36,7 +36,7 @@ def load_survey_data(galaxy_type,config,zmin=None,zmax=None,debug=False):
 
     # load our catalogue that contains the clean sample
     load_columns = ["TARGETID","Z"] + required_columns
-    if (galaxy_type[:3] == "BGS") and ("Y1" in config['general']['full_lss_path']):
+    if (galaxy_type[:3] == "BGS") and ("Y1" in config['general'][f'magnitude_def_{galaxy_type}']):
         load_columns += ["ABSMAG01_SDSS_R"]
     if config['general']['fiber_mag_lensing'] == 'Tabulated':
         tabulatedbool=True
@@ -137,7 +137,7 @@ def apply_lensing(data,  kappa,  galaxy_type, config, verbose=False ):
             print(f"Column {column_to_magnify} not found in data_mag.colnames. Skipping magnification.")
 
     #absolute magnitude for BGS
-    if(galaxy_type == "BGS_BRIGHT") and ("Y1" in config['general']['full_lss_path']):
+    if(galaxy_type == "BGS_BRIGHT") and (config['general'][f'magnitude_def_{galaxy_type}'] == 'Y1'):
         #absolute mag calculation commutes with additive change in the aparent magnitude calculation
         data_mag["ABSMAG01_SDSS_R"] += - 2.5 * np.log10(1.+2.*kappa)
         #sign: for positive kappa galaxy gets brighter -> aparent magnitude gets smaller
