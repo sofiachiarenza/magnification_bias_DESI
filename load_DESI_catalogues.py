@@ -242,5 +242,46 @@ def read_table(filename, columns=None, memmap=True, tabulatedbool=False):
     return data
 
 
+def load_photo_data(galaxy_type, columns):
+    """Load photometric galaxy data using the DESI_Y3_x_CMB PhotoSample loader.
+
+    Parameters
+    ----------
+    galaxy_type : str
+        Galaxy type identifier (e.g., 'BGS_phot')
+    columns : list of str
+        Columns to load from the photometric catalog
+
+    Returns
+    -------
+    astropy.table.Table
+        Filtered photometric catalog
+    """
+    import sys
+    desi_y3_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'DESI_Y3_x_CMB')
+    if desi_y3_path not in sys.path:
+        sys.path.insert(0, desi_y3_path)
+
+    from DESI_Y3_x_CMB.measurement_pipeline.samples.photo_sample import PhotoSample
+    from DESI_Y3_x_CMB.auxiliary.sample_enums import GALAXY_SAMPLE
+
+    sample_map = {
+        'BGS_phot': GALAXY_SAMPLE.BGS,
+    }
+    if galaxy_type not in sample_map:
+        raise ValueError(f"Photometric galaxy_type '{galaxy_type}' not recognized. Available: {list(sample_map.keys())}")
+
+    sample_enum = sample_map[galaxy_type]
+    photo_sample = PhotoSample(sample_enum)
+    photo_sample.load_raw_data(columns=columns, verbose=True)
+
+    # Extract the catalog as an astropy Table
+    col_names = photo_sample.columns
+    data = Table()
+    for col in col_names:
+        data[col] = photo_sample.get_cat_attrs(col)
+    return data
+
+
 def is_table_masked(table):
     return any(getattr(col, 'mask', None) is not None for col in table.columns.values())

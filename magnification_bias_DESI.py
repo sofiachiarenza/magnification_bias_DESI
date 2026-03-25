@@ -24,15 +24,49 @@ from make_region_selections import region_selection_functions
 
 import copy
 
-from load_DESI_catalogues import read_table
+from load_DESI_catalogues import read_table, load_photo_data
 
 def load_survey_data(galaxy_type,config,zmin=None,zmax=None,debug=False):
+    # Configurable redshift column
+    zcol = config.get('general', f'zcol_{galaxy_type}', fallback='Z')
+
+    required_columns = get_required_columns(galaxy_type)
+
+    if galaxy_type == "BGS_phot":
+        # Photometric sample: load via PhotoSample
+        load_columns = list(set(required_columns + [zcol]))
+        gal_tab = load_photo_data(galaxy_type, columns=load_columns)
+
+        # Rename zcol to 'Z' so downstream z-binning works unchanged
+        if zcol != 'Z':
+            gal_tab.rename_column(zcol, 'Z')
+
+        # Apply redshift cuts
+        mask_zbins = np.ones(len(gal_tab), dtype=bool)
+        if zmin is not None:
+            mask_zbins &= (gal_tab['Z'] >= zmin)
+        if zmax is not None:
+            mask_zbins &= (gal_tab['Z'] < zmax)
+        gal_tab = gal_tab[mask_zbins]
+
+        # Rename TYPE -> MORPHTYPE for compatibility with downstream fiber correction code
+        if 'TYPE' in gal_tab.colnames and 'MORPHTYPE' not in gal_tab.colnames:
+            gal_tab.rename_column('TYPE', 'MORPHTYPE')
+
+        # Compute AXIS_RATIO from SHAPE_E1/E2 (spectroscopic path gets this via cross-match)
+        ellipticity = (gal_tab['SHAPE_E1']**2 + gal_tab['SHAPE_E2']**2)**0.5
+        gal_tab['AXIS_RATIO'] = (1 + ellipticity) / (1 - ellipticity)
+
+        # Apply photocuts (should be mostly a no-op since PhotoSample already filtered)
+        selection_mask = apply_photocuts_DESI(gal_tab, galaxy_type)
+        print(f"Loaded {len(gal_tab)} {galaxy_type} galaxies, {len(gal_tab)-np.sum(selection_mask)} did not pass the photometric cuts")
+        return gal_tab[selection_mask]
+
+    # Spectroscopic samples: load from LSS clustering catalogs
     fpath_lss = config['general']['full_lss_path']
     # fpath_gal = config['general']['lensing_path']
     fpath_gal = fpath_lss
     version = config['general']['version']
-
-    required_columns = get_required_columns(galaxy_type)
 
     # load our catalogue that contains the clean sample
     load_columns = ["TARGETID","Z"] + required_columns
@@ -56,7 +90,7 @@ def load_survey_data(galaxy_type,config,zmin=None,zmax=None,debug=False):
     if zmax is not None:
         mask_zbins &= (gal_tab['Z'] < zmax)
     gal_tab = gal_tab[mask_zbins]
-    
+
     # apply the photometric cuts (it is necessary since a few galaxies do not pass the initial photo-z cuts)
     # I am not sure why that is. It is only ~10 galaxies though, so the error should be irrelevant
     selection_mask = apply_photocuts_DESI(gal_tab,galaxy_type)
@@ -213,7 +247,7 @@ def apply_lensing(data,  kappa,  galaxy_type, config, verbose=False ):
     
     
     # to lens secondary properties we need difference between unmagnified and magnified fiber flux
-    if(config.getboolean("general","apply_cut_secondary_properties")):
+    if(config.getboolean("general","apply_cut_secondary_properties")) and config.has_option("secondary_properties", f"Xval_{galaxy_type}"):
         secondary_properties_fiber_column = config["secondary_properties"][f"Xval_{galaxy_type}"]
         fibermag_unmagnified = copy.deepcopy(data_mag[secondary_properties_fiber_column])
 
@@ -223,7 +257,7 @@ def apply_lensing(data,  kappa,  galaxy_type, config, verbose=False ):
         data_mag[fiber_tot_column] =  diff_fibertot_fiber + data_mag[fiber_column]
 
     #lensing the secondary properties
-    if(config.getboolean("general","apply_cut_secondary_properties")):
+    if(config.getboolean("general","apply_cut_secondary_properties")) and config.has_option("secondary_properties", f"Xval_{galaxy_type}"):
         data_mag = apply_lensing_secondary_properties(data_mag, fibermag_unmagnified, galaxy_type, config, verbose=verbose)
 
     #If your survey only uses magnitudes that capture the full light of the galaxies, psf magnitudes and aperture magnitudes you can copy the method apply_lensing_v3 provided in magnification_bias_SDSS.py and just change the labels of the magnitudes used in your survey.
@@ -251,10 +285,14 @@ def apply_lensing_secondary_properties(data, fibermag_unmagnified, galaxy_type, 
 def get_weights(weights_str, data, galaxy_type):
     #implement the weights used for your galaxy survey. We used a string to switch between options but you can of course change that convention
     if weights_str == 'none':
-        weights = None
+        weights = np.ones(len(data))
     elif weights_str == 'weight_FKP':
         weights = data['WEIGHT']*data['WEIGHT_FKP']
     elif weights_str == 'weight':
+        if 'WEIGHT' not in data.colnames:
+            import warnings
+            warnings.warn("No WEIGHT column found in data. Returning weights of 1.")
+            return np.ones(len(data))
         weights = data['WEIGHT']
     return weights
 
@@ -471,7 +509,9 @@ def apply_all_cuts_individual_cuts(full_tab,galaxy_type,config,verbose=False):
     masks_tab = apply_photocuts_DESI_individual_cuts(full_tab,galaxy_type)
     masks_tab.add_column(apply_magnitude_cuts(full_tab,galaxy_type,config),name="absolute magnitude cuts")
     if(config.getboolean("general","apply_cut_secondary_properties")):
-        masks_tab = hstack([masks_tab,apply_secondary_cuts_individual_cuts(full_tab,galaxy_type)],join_type="exact")
+        secondary_tab = apply_secondary_cuts_individual_cuts(full_tab,galaxy_type)
+        if len(secondary_tab.colnames) > 0:
+            masks_tab = hstack([masks_tab,secondary_tab],join_type="exact")
         # if(verbose):
             # print("Secondary properties remove {}/{} galaxies".format(np.sum(~secondery_mask), len(secondery_mask)))
     return masks_tab

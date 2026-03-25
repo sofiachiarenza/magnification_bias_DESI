@@ -6,7 +6,9 @@ from desitarget.cuts import isQSO_randomforest
 import fitsio
 
 def get_required_columns(galaxy_type):
-    if galaxy_type[:3]=="BGS":
+    if galaxy_type == "BGS_phot":
+        return ['TARGETID', 'PHOTSYS', 'RA', 'DEC', 'FLUX_G', 'FLUX_R', 'FLUX_Z', 'FLUX_W1', 'FLUX_IVAR_G', 'FLUX_IVAR_R', 'FLUX_IVAR_Z', 'FIBERFLUX_R', 'FIBERTOTFLUX_R', 'EBV', 'MASKBITS', 'NOBS_G', 'NOBS_R', 'NOBS_Z', 'SHAPE_R', 'SHAPE_E1', 'SHAPE_E2', 'SERSIC', 'TYPE', 'MW_TRANSMISSION_R']
+    elif galaxy_type[:3]=="BGS":
         return ['TARGETID', 'PHOTSYS', 'RA', 'DEC', 'FLUX_G', 'FLUX_R', 'FLUX_Z', 'FLUX_W1', 'FLUX_IVAR_G', 'FLUX_IVAR_R', 'FLUX_IVAR_Z', 'FIBERFLUX_R', 'FIBERTOTFLUX_R', 'EBV', 'MASKBITS', 'NOBS_G', 'NOBS_R', 'NOBS_Z', 'SHAPE_R', 'TSNR2_BGS', 'ZWARN', 'DELTACHI2', 'WEIGHT','WEIGHT_FKP','MORPHTYPE','MW_TRANSMISSION_R']
     elif galaxy_type[:3]=="LRG":
         return ['TARGETID', 'PHOTSYS', 'RA', 'DEC', 'FLUX_G', 'FLUX_R', 'FLUX_Z', 'FLUX_W1', 'FLUX_IVAR_R', 'FLUX_IVAR_Z', 'FLUX_IVAR_W1', 'FIBERFLUX_Z', 'FIBERTOTFLUX_Z', 'EBV', 'MASKBITS', 'NOBS_G', 'NOBS_R', 'NOBS_Z', 'SHAPE_R', 'TSNR2_ELG', 'ZWARN', 'DELTACHI2', 'WEIGHT', 'WEIGHT_FKP','MORPHTYPE']
@@ -227,6 +229,22 @@ def select_elg_simplified(cat):
 
 def select_bgs_bright(cat,field='south'):
     return select_bgs(cat,field)[0]
+
+def select_bgs_phot(cat, field='south'):
+    """BGS photometric selection: BGS BRIGHT cuts + observed FIBERFLUX_R mag < 21.0"""
+    mask = select_bgs_bright(cat, field)
+    # Observed (NOT dereddened) FIBERFLUX_R magnitude cut
+    fiberflux_r_mag = 22.5 - 2.5*np.log10(np.clip(cat['FIBERFLUX_R'], 1e-16, None))
+    mask &= (fiberflux_r_mag < 21.0)
+    return mask
+
+def select_bgs_phot_individual_cuts(cat, field='south'):
+    """Individual cuts version of BGS photometric selection."""
+    mask_tab = select_bgs_bright_individual_cuts(cat, field)
+    # Observed (NOT dereddened) FIBERFLUX_R magnitude cut
+    fiberflux_r_mag = 22.5 - 2.5*np.log10(np.clip(cat['FIBERFLUX_R'], 1e-16, None))
+    mask_tab.add_column(fiberflux_r_mag < 21.0, name='fiberflux_r < 21.0')
+    return mask_tab
 
 def select_bgs(cat, field='south'):
     '''
