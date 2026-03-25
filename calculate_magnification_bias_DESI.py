@@ -71,6 +71,9 @@ for galaxy_type in galaxy_types:
     if config.getboolean('general','apply_individual_cuts'):
         alphas_individual_cuts[galaxy_type] = {}
 
+    # Configurable weights per galaxy type
+    weights_str = config.get('general', f'weights_{galaxy_type}', fallback='weight')
+
     # Data loading is expensive, load it once only!
     full_galcat = magnification_bias_DESI.load_survey_data(galaxy_type, config)
     # Loop over z-bins
@@ -97,7 +100,7 @@ for galaxy_type in galaxy_types:
             
             # Calculate alpha - single step size
             alpha_simple, alpha_simple_err = magnification_bias_DESI.calculate_alpha_simple_DESI(
-                galcat_region, kappa=0.01, galaxy_type=galaxy_type, config=config, weights_str="weight")
+                galcat_region, kappa=0.01, galaxy_type=galaxy_type, config=config, weights_str=weights_str)
             print(f"  alpha_simple = {alpha_simple} +- {alpha_simple_err}")
             
             simple_alphas[galaxy_type][region]['alphas'].append(alpha_simple)
@@ -107,13 +110,13 @@ for galaxy_type in galaxy_types:
             if config.getboolean('general','apply_individual_cuts'):
                 print("  Applying individual cuts")
                 result_dict = magnification_bias_DESI.calculate_alpha_simple_DESI_individual_cuts(
-                    galcat_region, kappa=0.01, galaxy_type=galaxy_type, config=config, weights_str="weight")
+                    galcat_region, kappa=0.01, galaxy_type=galaxy_type, config=config, weights_str=weights_str)
                 alphas_individual_cuts[galaxy_type][region][f"zbin_{i}"] = result_dict
             
             # Full alpha calculation if requested
             if do_full_alpha_stepwise_calculation:
                 result = magnification_bias_DESI.calculate_alpha_DESI(
-                    galcat_region, kappas, galaxy_type=galaxy_type, config=config, weights_str="weight")
+                    galcat_region, kappas, galaxy_type=galaxy_type, config=config, weights_str=weights_str)
                 print(f"  alpha = {result['fit']['alpha_fit']} +- {result['fit']['alpha_fit_error']}")
                 alphas[galaxy_type][region].append(result)
     
