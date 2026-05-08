@@ -32,7 +32,7 @@ def load_survey_data(galaxy_type,config,zmin=None,zmax=None,debug=False):
 
     required_columns = get_required_columns(galaxy_type)
 
-    if galaxy_type == "BGS_phot":
+    if galaxy_type in ("BGS_phot", "LRG_phot"):
         # Photometric sample: load via PhotoSample
         load_columns = list(set(required_columns + [zcol]))
         gal_tab = load_photo_data(galaxy_type, columns=load_columns)
@@ -123,6 +123,16 @@ def apply_region_selection(data, region_name):
     # Handle 'all' region - no filtering
     if region_name.lower() == 'all':
         return data
+
+    if region_name.lower() == 'des_photo-only':
+        region_selector = region_selection_functions['des']
+
+        region_mask = region_selector(data)
+        dec_mask = (data['DEC'] < -19.6)
+        combined_mask = region_mask & dec_mask
+        print(f"Region 'des_photo-only': selected {np.sum(combined_mask)}/{len(data)} galaxies")
+        return data[combined_mask]
+
     
     # Get the region selector function
     if region_name not in region_selection_functions:
@@ -183,7 +193,7 @@ def apply_lensing(data,  kappa,  galaxy_type, config, verbose=False ):
     #the additional Fiber fluxes are more nuianced. Need size information for the galaxies to get an accurate estiamte,
     #e.g. a radius 
 
-    if(galaxy_type == "LRG"):
+    if(galaxy_type in ("LRG", "LRG_phot")):
         fiber_column = "FIBERFLUX_Z"
         fiber_tot_column = "FIBERTOTFLUX_Z"
     elif(galaxy_type.split("-")[0][:3] == "BGS"):
@@ -284,10 +294,13 @@ def apply_lensing_secondary_properties(data, fibermag_unmagnified, galaxy_type, 
 
 def get_weights(weights_str, data, galaxy_type):
     #implement the weights used for your galaxy survey. We used a string to switch between options but you can of course change that convention
+    print("Setting weights: {} for galaxy type {}".format(weights_str, galaxy_type))
     if weights_str == 'none':
         weights = np.ones(len(data))
     elif weights_str == 'weight_FKP':
         weights = data['WEIGHT']*data['WEIGHT_FKP']
+    elif weights_str == 'weight_phot':
+        weights = data['Z_WEIGHT'] * data['WEIGHT_IMLIN']
     elif weights_str == 'weight':
         if 'WEIGHT' not in data.colnames:
             import warnings

@@ -69,9 +69,9 @@ def get_magnitude_mask_dr2(data_table,magnitude_cuts,lens_bins,zcol="Z"):
 
 
 def apply_magnitude_cuts(data_table,galaxy_type,config,mag_col="ABSMAG01_SDSS_R",zcol="Z"):
-    if galaxy_type == "BGS_phot":
+    if galaxy_type in ("BGS_phot", "LRG_phot"):
         import warnings
-        warnings.warn("BGS_phot are hardcoded to not apply absolute magnitude cuts. If you have specified magnitude cuts, this will cause issues.")
+        warnings.warn(f"{galaxy_type} are hardcoded to not apply absolute magnitude cuts. If you have specified magnitude cuts, this will cause issues.")
         return np.ones(len(data_table),dtype=bool)
     magnitude_cuts = config.get('general',f'absmag_cuts_{galaxy_type}',fallback=None)
     # print("Magnitude cuts: ",magnitude_cuts)
@@ -122,7 +122,7 @@ def select_good_redshifts(data_table, galaxy_type, zcol="Z"):
     return mask
 
 def apply_photocuts_DESI(data, galaxy_type):
-    if galaxy_type == "LRG":
+    if galaxy_type in ("LRG", "LRG_phot"):
         selection_fnc = select_lrg
     elif galaxy_type == "BGS_phot":
         selection_fnc = select_bgs_phot
@@ -146,7 +146,7 @@ def apply_photocuts_DESI(data, galaxy_type):
     return selection_mask
 
 def apply_secondary_cuts(data_cat,galaxy_type):
-    if galaxy_type == "BGS_phot":
+    if galaxy_type in ("BGS_phot", "LRG_phot"):
         return np.ones(len(data_cat),dtype=bool)
     mask = apply_tsnr_cut(data_cat,galaxy_type)
     # print(galaxy_type,np.sum(mask),len(mask))
@@ -155,7 +155,7 @@ def apply_secondary_cuts(data_cat,galaxy_type):
     return mask
 
 def apply_photocuts_DESI_individual_cuts(data, galaxy_type):
-    if galaxy_type == "LRG":
+    if galaxy_type in ("LRG", "LRG_phot"):
         selection_fnc = select_lrg_individual_cuts
     elif galaxy_type == "BGS_phot":
         selection_fnc = select_bgs_phot_individual_cuts
@@ -184,9 +184,9 @@ def apply_photocuts_DESI_individual_cuts(data, galaxy_type):
     return selection_mask_tab
 
 def apply_secondary_cuts_individual_cuts(data_cat,galaxy_type):
-    if galaxy_type == "BGS_phot":
+    if galaxy_type in ("BGS_phot", "LRG_phot"):
         import warnings
-        warnings.warn("BGS_phot are hardcoded to not apply secondary cuts. This should not impact anything.")
+        warnings.warn(f"{galaxy_type} are hardcoded to not apply secondary cuts. This should not impact anything.")
         return Table()
     mask1 = apply_tsnr_cut(data_cat,galaxy_type)
     mask2 = select_good_redshifts(data_cat,galaxy_type)
