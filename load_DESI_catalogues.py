@@ -242,5 +242,72 @@ def read_table(filename, columns=None, memmap=True, tabulatedbool=False):
     return data
 
 
+def load_photo_data(galaxy_type, columns, region_name='des'):
+    """Load photometric galaxy data using the DESI_Y3_x_CMB PhotoSample loader.
+
+    Parameters
+    ----------
+    galaxy_type : str
+        Galaxy type identifier (e.g., 'BGS_phot')
+    columns : list of str
+        Columns to load from the photometric catalog
+    region_name : str, optional
+        Imaging region: 'des', 'north', 'south', or 'des_photo-only' (default: 'des')
+
+    Returns
+    -------
+    astropy.table.Table
+        Filtered photometric catalog
+    """
+    import sys
+    scripts_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'DESI_Y3_x_CMB', 'scripts')
+    if scripts_path not in sys.path:
+        sys.path.insert(0, scripts_path)
+
+    from DR2_analysis_utils import get_photo_sample_obj
+
+    sample_map = {
+        'BGS_phot': ['BGS'],
+        'LRG_phot': ['LRG1', 'LRG2', 'LRG3'],
+    }
+    if galaxy_type not in sample_map:
+        raise ValueError(f"Photometric galaxy_type '{galaxy_type}' not recognized. Available: {list(sample_map.keys())}")
+
+    from DESI_Y3_x_CMB.measurement_pipeline.samples.photo_sample import PhotoSample
+    from DESI_Y3_x_CMB.auxiliary.sample_enums import GALAXY_SAMPLE
+
+    sample_names = sample_map[galaxy_type]
+    # Columns only available in the raw FITS files, not in the saved derived data
+    raw_only_columns = columns.copy()
+
+    tables = []
+    for sample_idx, sample_name in enumerate(sample_names):
+        # Load processed/derived catalog (includes region subselection)
+        photo_sample = get_photo_sample_obj(sample_name, region_name=region_name, new=False)
+        photo_sample.load_data()
+        col_names = photo_sample.columns + ['WEIGHT_IMLIN']
+        part = Table()
+        for col in col_names:
+            part[col] = photo_sample.get_cat_attrs(col)
+
+        # Load raw-only columns via load_raw_data and join on TARGETID
+        raw_sample = PhotoSample(GALAXY_SAMPLE[sample_name])
+        raw_sample.load_raw_data(columns=raw_only_columns)  # LRG photometric redshifts are not available, hard-coded for z-cuts
+        raw_col_names = raw_sample.columns
+        raw_part = Table()
+        for col in raw_col_names:
+            if col=='TARGETID' or not col in col_names: #avoid duplicates except TARGETID, by which we join
+                raw_part[col] = raw_sample.get_cat_attrs(col)
+
+        lpart = len(part)
+        part = join(part, raw_part, keys='TARGETID', join_type='inner')
+        assert lpart == len(part), f"Join on TARGETID resulted in length change: {lpart} vs {len(part)}"
+        tables.append(part)
+    data = vstack(tables) if len(tables) > 1 else tables[0]
+    # if 'Z_PHOT_MEDIAN' in data.columns and 'Z' not in data.columns:
+        # data.rename_column('Z_PHOT_MEDIAN', 'Z')
+    return data
+
+
 def is_table_masked(table):
     return any(getattr(col, 'mask', None) is not None for col in table.columns.values())

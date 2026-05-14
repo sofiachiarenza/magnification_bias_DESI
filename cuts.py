@@ -1,5 +1,5 @@
 import numpy as np
-from istarget import (select_lrg,select_bgs_bright,select_lrg_individual_cuts,select_bgs_bright_individual_cuts,
+from istarget import (select_lrg,select_bgs_bright,select_bgs_phot,select_lrg_individual_cuts,select_bgs_bright_individual_cuts,select_bgs_phot_individual_cuts,
 select_elg_lopnotqso,select_elg_lopnotqso_individual_cuts,select_elg_notqso,select_qso,select_qso_individual_cuts)
 from astropy.table import Table
 
@@ -69,6 +69,10 @@ def get_magnitude_mask_dr2(data_table,magnitude_cuts,lens_bins,zcol="Z"):
 
 
 def apply_magnitude_cuts(data_table,galaxy_type,config,mag_col="ABSMAG01_SDSS_R",zcol="Z"):
+    if galaxy_type in ("BGS_phot", "LRG_phot"):
+        import warnings
+        warnings.warn(f"{galaxy_type} are hardcoded to not apply absolute magnitude cuts. If you have specified magnitude cuts, this will cause issues.")
+        return np.ones(len(data_table),dtype=bool)
     magnitude_cuts = config.get('general',f'absmag_cuts_{galaxy_type}',fallback=None)
     # print("Magnitude cuts: ",magnitude_cuts)
     if magnitude_cuts is not None:
@@ -118,8 +122,10 @@ def select_good_redshifts(data_table, galaxy_type, zcol="Z"):
     return mask
 
 def apply_photocuts_DESI(data, galaxy_type):
-    if galaxy_type == "LRG":
+    if galaxy_type in ("LRG", "LRG_phot"):
         selection_fnc = select_lrg
+    elif galaxy_type == "BGS_phot":
+        selection_fnc = select_bgs_phot
     elif galaxy_type.split("-")[0] == "BGS_BRIGHT":
         selection_fnc = select_bgs_bright
     elif galaxy_type == "ELG_LOPnotqso":
@@ -140,6 +146,8 @@ def apply_photocuts_DESI(data, galaxy_type):
     return selection_mask
 
 def apply_secondary_cuts(data_cat,galaxy_type):
+    if galaxy_type in ("BGS_phot", "LRG_phot"):
+        return np.ones(len(data_cat),dtype=bool)
     mask = apply_tsnr_cut(data_cat,galaxy_type)
     # print(galaxy_type,np.sum(mask),len(mask))
     mask &= select_good_redshifts(data_cat,galaxy_type)
@@ -147,8 +155,10 @@ def apply_secondary_cuts(data_cat,galaxy_type):
     return mask
 
 def apply_photocuts_DESI_individual_cuts(data, galaxy_type):
-    if galaxy_type == "LRG":
+    if galaxy_type in ("LRG", "LRG_phot"):
         selection_fnc = select_lrg_individual_cuts
+    elif galaxy_type == "BGS_phot":
+        selection_fnc = select_bgs_phot_individual_cuts
     elif galaxy_type.split("-")[0] == "BGS_BRIGHT":
         selection_fnc = select_bgs_bright_individual_cuts
     elif galaxy_type == 'ELG_LOPnotqso':
@@ -174,6 +184,41 @@ def apply_photocuts_DESI_individual_cuts(data, galaxy_type):
     return selection_mask_tab
 
 def apply_secondary_cuts_individual_cuts(data_cat,galaxy_type):
+    if galaxy_type in ("BGS_phot", "LRG_phot"):
+        import warnings
+        warnings.warn(f"{galaxy_type} are hardcoded to not apply secondary cuts. This should not impact anything.")
+        return Table()
     mask1 = apply_tsnr_cut(data_cat,galaxy_type)
     mask2 = select_good_redshifts(data_cat,galaxy_type)
     return Table([mask1,mask2],names=["tsnr_cut","deltachi2_cut"])
+
+
+def apply_redshift_bin_cuts(data_table, zmin=None, zmax=None, zcol='Z'):
+    """Return a boolean mask keeping galaxies within [zmin, zmax).
+
+    If neither zmin nor zmax is given, returns an all-True mask.
+
+    Parameters
+    ----------
+    data_table : astropy.table.Table
+        Galaxy catalogue.
+    zmin : float, optional
+        Lower redshift edge (inclusive).
+    zmax : float, optional
+        Upper redshift edge (exclusive).
+    zcol : str, optional
+        Name of the redshift column.  Defaults to ``'Z'``.
+
+    Returns
+    -------
+    mask : np.ndarray of bool
+        Boolean mask of length ``len(data_table)``.
+    """
+    if zmin is None and zmax is None:
+        return np.ones(len(data_table), dtype=bool)
+    mask = np.ones(len(data_table), dtype=bool)
+    if zmin is not None:
+        mask &= (data_table[zcol] >= zmin)
+    if zmax is not None:
+        mask &= (data_table[zcol] < zmax)
+    return mask

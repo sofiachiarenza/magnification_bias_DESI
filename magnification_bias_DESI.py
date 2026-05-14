@@ -14,7 +14,7 @@ from astropy.table import Table,join,hstack,vstack
 import os
 import fitsio
 from scipy.optimize import curve_fit
-from cuts import apply_photocuts_DESI,apply_magnitude_cuts,apply_secondary_cuts,apply_photocuts_DESI_individual_cuts,apply_secondary_cuts_individual_cuts
+from cuts import apply_photocuts_DESI,apply_magnitude_cuts,apply_secondary_cuts,apply_photocuts_DESI_individual_cuts,apply_secondary_cuts_individual_cuts,apply_redshift_bin_cuts
 import json
 from scipy.interpolate import RectBivariateSpline
 from scipy.interpolate import NearestNDInterpolator
@@ -24,15 +24,49 @@ from make_region_selections import region_selection_functions
 
 import copy
 
-from load_DESI_catalogues import read_table
+from load_DESI_catalogues import read_table, load_photo_data
 
 def load_survey_data(galaxy_type,config,zmin=None,zmax=None,debug=False):
+    # Configurable redshift column
+    zcol = config.get('general', f'zcol_{galaxy_type}', fallback='Z')
+
+    required_columns = get_required_columns(galaxy_type)
+
+    if galaxy_type in ("BGS_phot", "LRG_phot"):
+        # Photometric sample: load via PhotoSample
+        load_columns = list(set(required_columns + [zcol]))
+        gal_tab = load_photo_data(galaxy_type, columns=load_columns)
+
+        # Rename zcol to 'Z' so downstream z-binning works unchanged
+        if zcol != 'Z':
+            gal_tab.rename_column(zcol, 'Z')
+
+        # Apply redshift cuts
+        mask_zbins = np.ones(len(gal_tab), dtype=bool)
+        if zmin is not None:
+            mask_zbins &= (gal_tab['Z'] >= zmin)
+        if zmax is not None:
+            mask_zbins &= (gal_tab['Z'] < zmax)
+        gal_tab = gal_tab[mask_zbins]
+
+        # Rename TYPE -> MORPHTYPE for compatibility with downstream fiber correction code
+        if 'TYPE' in gal_tab.colnames and 'MORPHTYPE' not in gal_tab.colnames:
+            gal_tab.rename_column('TYPE', 'MORPHTYPE')
+
+        # Compute AXIS_RATIO from SHAPE_E1/E2 (spectroscopic path gets this via cross-match)
+        ellipticity = (gal_tab['SHAPE_E1']**2 + gal_tab['SHAPE_E2']**2)**0.5
+        gal_tab['AXIS_RATIO'] = (1 + ellipticity) / (1 - ellipticity)
+
+        # Apply photocuts (should be mostly a no-op since PhotoSample already filtered)
+        selection_mask = apply_photocuts_DESI(gal_tab, galaxy_type)
+        print(f"Loaded {len(gal_tab)} {galaxy_type} galaxies, {len(gal_tab)-np.sum(selection_mask)} did not pass the photometric cuts")
+        return gal_tab[selection_mask]
+
+    # Spectroscopic samples: load from LSS clustering catalogs
     fpath_lss = config['general']['full_lss_path']
     # fpath_gal = config['general']['lensing_path']
     fpath_gal = fpath_lss
     version = config['general']['version']
-
-    required_columns = get_required_columns(galaxy_type)
 
     # load our catalogue that contains the clean sample
     load_columns = ["TARGETID","Z"] + required_columns
@@ -56,7 +90,7 @@ def load_survey_data(galaxy_type,config,zmin=None,zmax=None,debug=False):
     if zmax is not None:
         mask_zbins &= (gal_tab['Z'] < zmax)
     gal_tab = gal_tab[mask_zbins]
-    
+
     # apply the photometric cuts (it is necessary since a few galaxies do not pass the initial photo-z cuts)
     # I am not sure why that is. It is only ~10 galaxies though, so the error should be irrelevant
     selection_mask = apply_photocuts_DESI(gal_tab,galaxy_type)
@@ -89,6 +123,16 @@ def apply_region_selection(data, region_name):
     # Handle 'all' region - no filtering
     if region_name.lower() == 'all':
         return data
+
+    if region_name.lower() == 'des_photo-only':
+        region_selector = region_selection_functions['des']
+
+        region_mask = region_selector(data)
+        dec_mask = (data['DEC'] < -19.6)
+        combined_mask = region_mask & dec_mask
+        print(f"Region 'des_photo-only': selected {np.sum(combined_mask)}/{len(data)} galaxies")
+        return data[combined_mask]
+
     
     # Get the region selector function
     if region_name not in region_selection_functions:
@@ -107,6 +151,122 @@ def apply_region_selection(data, region_name):
     print(f"Region '{region_name}': selected {np.sum(region_mask)}/{len(data)} galaxies")
     
     return data[region_mask]
+
+
+# Module-level cache for photo-z shift catalog (loaded once on first use)
+_photoz_shift_cache = None
+
+_PHOTOZ_DIR = '/global/cfs/cdirs/desi/users/rongpu/data/lrg_xcorr/magnification/'
+# Magnification levels and their corresponding reference kappa values: kappa = (mag - 1) / 2
+_PHOTOZ_KAPPA_MINUS = -0.005  # (0.99 - 1) / 2
+_PHOTOZ_KAPPA_PLUS  =  0.005  # (1.01 - 1) / 2
+
+
+def _load_photoz_shift_catalog():
+    """Load and cache the LRG_phot photo-z shift catalogs for the three magnification levels.
+
+    Reads ``main_lrg_magnification_pz_{north,south}_{0.99,1,1.01}.fits`` from
+    ``_PHOTOZ_DIR``, merges north and south, and computes per-galaxy
+    ``Z_PHOT_SHIFT_MINUS`` (at kappa = -0.005) and ``Z_PHOT_SHIFT_PLUS``
+    (at kappa = +0.005) relative to the fiducial (magnification = 1).
+
+    The ``OBJID``, ``BRICKID`` and ``RELEASE`` columns in the photo-z catalogs
+    are encoded into ``TARGETID`` via :func:`desitarget.targets.encode_targetid`
+    for matching against the galaxy catalogue.
+
+    Returns
+    -------
+    shift_tab : astropy.table.Table
+        Table with columns ``['TARGETID', 'Z_PHOT_SHIFT_MINUS', 'Z_PHOT_SHIFT_PLUS']``.
+    """
+    global _photoz_shift_cache
+    if _photoz_shift_cache is not None:
+        return _photoz_shift_cache
+
+    from desitarget.targets import encode_targetid
+
+    def _load_merged(mag_str):
+        tabs = []
+        for region in ['north', 'south']:
+            fname = os.path.join(_PHOTOZ_DIR, f'main_lrg_magnification_pz_{region}_{mag_str}.fits')
+            tab = Table.read(fname)
+            tab.keep_columns(['OBJID', 'BRICKID', 'RELEASE', 'Z_PHOT_MEDIAN'])
+            tab['TARGETID'] = encode_targetid(objid=np.asarray(tab['OBJID']),
+                                              brickid=np.asarray(tab['BRICKID']),
+                                              release=np.asarray(tab['RELEASE']))
+            tabs.append(tab['TARGETID', 'Z_PHOT_MEDIAN'])
+        return vstack(tabs)
+
+    tab_fid   = _load_merged('1')
+    tab_minus = _load_merged('0.99')
+    tab_plus  = _load_merged('1.01')
+
+    tab_minus.rename_column('Z_PHOT_MEDIAN', 'Z_PHOT_MEDIAN_099')
+    tab_plus.rename_column('Z_PHOT_MEDIAN',  'Z_PHOT_MEDIAN_101')
+
+    merged = join(tab_fid,   tab_minus, keys='TARGETID')
+    merged = join(merged,    tab_plus,  keys='TARGETID')
+
+    merged['Z_PHOT_SHIFT_MINUS'] = merged['Z_PHOT_MEDIAN_099'] - merged['Z_PHOT_MEDIAN']
+    merged['Z_PHOT_SHIFT_PLUS']  = merged['Z_PHOT_MEDIAN_101'] - merged['Z_PHOT_MEDIAN']
+
+    _photoz_shift_cache = merged['TARGETID', 'Z_PHOT_SHIFT_MINUS', 'Z_PHOT_SHIFT_PLUS']
+    return _photoz_shift_cache
+
+
+def apply_lensing_to_photoz(data_mag, kappa):
+    """Apply per-galaxy photo-z shifts to LRG_phot data for a given lensing kappa.
+
+    Shifts are computed from pre-run photo-z catalogs at magnification levels
+    0.99, 1.0, and 1.01 (corresponding to kappa = -0.005, 0, +0.005).  The
+    shift at the requested ``kappa`` is obtained by linear interpolation or
+    extrapolation anchored at kappa = 0 (zero shift by definition).
+
+    The ``TARGETID`` in ``data_mag`` is matched to the encoded ``TARGETID``
+    derived from the photo-z catalogs' ``OBJID``/``BRICKID``/``RELEASE`` columns.
+    Galaxies with no match receive a shift of zero.
+
+    Parameters
+    ----------
+    data_mag : astropy.table.Table
+        Galaxy catalogue with ``TARGETID`` and ``Z`` columns (modified in-place).
+    kappa : float
+        Lensing convergence value to apply.
+
+    Returns
+    -------
+    data_mag : astropy.table.Table
+        Catalogue with updated ``Z`` column.
+    """
+    import warnings
+
+    shift_tab = _load_photoz_shift_catalog()
+
+    # Left-join on TARGETID; unmatched rows get masked values for the shift columns
+    matched = join(data_mag[['TARGETID']], shift_tab, keys='TARGETID', join_type='left')
+
+    shift_minus_col = matched['Z_PHOT_SHIFT_MINUS']
+    if hasattr(shift_minus_col, 'mask'):
+        n_missing = int(np.sum(shift_minus_col.mask))
+        if n_missing > 0:
+            warnings.warn(
+                f"apply_lensing_to_photoz: {n_missing} galaxies not found in the "
+                f"photo-z shift catalog. Their photo-z shift is set to 0."
+            )
+        shift_minus = np.asarray(shift_minus_col.filled(0.))
+        shift_plus  = np.asarray(matched['Z_PHOT_SHIFT_PLUS'].filled(0.))
+    else:
+        shift_minus = np.asarray(shift_minus_col)
+        shift_plus  = np.asarray(matched['Z_PHOT_SHIFT_PLUS'])
+
+    # Linear inter/extrapolation from kappa=0 (shift=0) through the reference point
+    if kappa >= 0:
+        z_phot_shift = shift_plus * (kappa / _PHOTOZ_KAPPA_PLUS)
+    else:
+        z_phot_shift = shift_minus * (kappa / _PHOTOZ_KAPPA_MINUS)
+
+    data_mag['Z'] = data_mag['Z'] + z_phot_shift
+    return data_mag
 
 
 def apply_lensing(data,  kappa,  galaxy_type, config, verbose=False ):
@@ -149,7 +309,7 @@ def apply_lensing(data,  kappa,  galaxy_type, config, verbose=False ):
     #the additional Fiber fluxes are more nuianced. Need size information for the galaxies to get an accurate estiamte,
     #e.g. a radius 
 
-    if(galaxy_type == "LRG"):
+    if(galaxy_type in ("LRG", "LRG_phot")):
         fiber_column = "FIBERFLUX_Z"
         fiber_tot_column = "FIBERTOTFLUX_Z"
     elif(galaxy_type.split("-")[0][:3] == "BGS"):
@@ -213,7 +373,7 @@ def apply_lensing(data,  kappa,  galaxy_type, config, verbose=False ):
     
     
     # to lens secondary properties we need difference between unmagnified and magnified fiber flux
-    if(config.getboolean("general","apply_cut_secondary_properties")):
+    if(config.getboolean("general","apply_cut_secondary_properties")) and config.has_option("secondary_properties", f"Xval_{galaxy_type}"):
         secondary_properties_fiber_column = config["secondary_properties"][f"Xval_{galaxy_type}"]
         fibermag_unmagnified = copy.deepcopy(data_mag[secondary_properties_fiber_column])
 
@@ -223,11 +383,16 @@ def apply_lensing(data,  kappa,  galaxy_type, config, verbose=False ):
         data_mag[fiber_tot_column] =  diff_fibertot_fiber + data_mag[fiber_column]
 
     #lensing the secondary properties
-    if(config.getboolean("general","apply_cut_secondary_properties")):
+    if(config.getboolean("general","apply_cut_secondary_properties")) and config.has_option("secondary_properties", f"Xval_{galaxy_type}"):
         data_mag = apply_lensing_secondary_properties(data_mag, fibermag_unmagnified, galaxy_type, config, verbose=verbose)
 
     #If your survey only uses magnitudes that capture the full light of the galaxies, psf magnitudes and aperture magnitudes you can copy the method apply_lensing_v3 provided in magnification_bias_SDSS.py and just change the labels of the magnitudes used in your survey.
     #note has to work for negative kappa too!
+
+    # Apply photo-z shifts for photometric LRG sample
+    if galaxy_type == 'LRG_phot':
+        data_mag = apply_lensing_to_photoz(data_mag, kappa)
+
     return data_mag
 
 def apply_lensing_secondary_properties(data, fibermag_unmagnified, galaxy_type, config, verbose=False ):
@@ -250,11 +415,18 @@ def apply_lensing_secondary_properties(data, fibermag_unmagnified, galaxy_type, 
 
 def get_weights(weights_str, data, galaxy_type):
     #implement the weights used for your galaxy survey. We used a string to switch between options but you can of course change that convention
+    print("Setting weights: {} for galaxy type {}".format(weights_str, galaxy_type))
     if weights_str == 'none':
-        weights = None
+        weights = np.ones(len(data))
     elif weights_str == 'weight_FKP':
         weights = data['WEIGHT']*data['WEIGHT_FKP']
+    elif weights_str == 'weight_phot':
+        weights = data['Z_WEIGHT'] * data['WEIGHT_IMLIN']
     elif weights_str == 'weight':
+        if 'WEIGHT' not in data.colnames:
+            import warnings
+            warnings.warn("No WEIGHT column found in data. Returning weights of 1.")
+            return np.ones(len(data))
         weights = data['WEIGHT']
     return weights
 
@@ -456,22 +628,28 @@ def fit_linear(xdats, ydats, sigmas):
     return fit
 
 
-def apply_all_cuts(full_tab,galaxy_type,config, verbose = False):
+
+def apply_all_cuts(full_tab,galaxy_type,config, verbose=False, zmin=None, zmax=None):
     selection_mask = apply_photocuts_DESI(full_tab,galaxy_type)
     magnitude_mask = apply_magnitude_cuts(full_tab,galaxy_type,config)
+    zbin_mask = apply_redshift_bin_cuts(full_tab, zmin=zmin, zmax=zmax)
     if(config.getboolean("general","apply_cut_secondary_properties")):
         secondery_mask = apply_secondary_cuts(full_tab,galaxy_type)
         if(verbose):
             print("Secondary properties remove {}/{} galaxies".format(np.sum(~secondery_mask), len(secondery_mask)))
     else:
         secondery_mask = np.ones(len(full_tab),dtype=bool)
-    return selection_mask * magnitude_mask * secondery_mask
+    return selection_mask * magnitude_mask * zbin_mask * secondery_mask
 
-def apply_all_cuts_individual_cuts(full_tab,galaxy_type,config,verbose=False):
+def apply_all_cuts_individual_cuts(full_tab,galaxy_type,config,verbose=False, zmin=None, zmax=None):
     masks_tab = apply_photocuts_DESI_individual_cuts(full_tab,galaxy_type)
     masks_tab.add_column(apply_magnitude_cuts(full_tab,galaxy_type,config),name="absolute magnitude cuts")
+    zbin_col = apply_redshift_bin_cuts(full_tab, zmin=zmin, zmax=zmax)
+    masks_tab.add_column(zbin_col, name="redshift bin cut")
     if(config.getboolean("general","apply_cut_secondary_properties")):
-        masks_tab = hstack([masks_tab,apply_secondary_cuts_individual_cuts(full_tab,galaxy_type)],join_type="exact")
+        secondary_tab = apply_secondary_cuts_individual_cuts(full_tab,galaxy_type)
+        if len(secondary_tab.colnames) > 0:
+            masks_tab = hstack([masks_tab,secondary_tab],join_type="exact")
         # if(verbose):
             # print("Secondary properties remove {}/{} galaxies".format(np.sum(~secondery_mask), len(secondery_mask)))
     return masks_tab
@@ -479,7 +657,7 @@ def apply_all_cuts_individual_cuts(full_tab,galaxy_type,config,verbose=False):
 
 
 #calculate alpha from a single step size
-def calculate_alpha_simple_DESI(data, kappa, galaxy_type, config, lensing_func =apply_lensing , weights_str="none"): 
+def calculate_alpha_simple_DESI(data, kappa, galaxy_type, config, lensing_func=apply_lensing, weights_str="none", zmin=None, zmax=None): 
     """Function to calculate the simple estimate for alpha for survey X
 
     Args:
@@ -488,6 +666,8 @@ def calculate_alpha_simple_DESI(data, kappa, galaxy_type, config, lensing_func =
         lensing_func (func, optional): Function to apply lensing to the data. Defaults to apply_lensing_v3.
         show_each_condition (bool, optional): Print out more details. Defaults to True.
         weights_str (str, optional): Weights for each galaxy. Defaults to "baseline".
+        zmin (float, optional): Lower edge of the analysis redshift bin. Defaults to None (uses full config zbins range).
+        zmax (float, optional): Upper edge of the analysis redshift bin. Defaults to None (uses full config zbins range).
 
     Returns:
         float: simple alpha estimate
@@ -501,7 +681,7 @@ def calculate_alpha_simple_DESI(data, kappa, galaxy_type, config, lensing_func =
     data_mag = lensing_func(data,  kappa, galaxy_type, config)
     #print(5/0)
 
-    combined_left = apply_all_cuts(data_mag, galaxy_type, config, verbose=True)
+    combined_left = apply_all_cuts(data_mag, galaxy_type, config, verbose=True, zmin=zmin, zmax=zmax)
     
     print('sum of weights',np.sum(weights))
     print('kappa',kappa)
@@ -511,7 +691,7 @@ def calculate_alpha_simple_DESI(data, kappa, galaxy_type, config, lensing_func =
 
     #other side
     data_mag = lensing_func(data,  -1.*kappa, galaxy_type, config)
-    combined_right = apply_all_cuts(data_mag, galaxy_type, config, verbose=True)
+    combined_right = apply_all_cuts(data_mag, galaxy_type, config, verbose=True, zmin=zmin, zmax=zmax)
     
     print('Total combined_right',np.sum(combined_right))
     print('Sum of weights right',np.sum(weights[combined_right]))
@@ -528,7 +708,7 @@ def calculate_alpha_simple_DESI(data, kappa, galaxy_type, config, lensing_func =
 
     return alpha, alpha_error
 
-def calculate_alpha_simple_DESI_individual_cuts(data, kappa, galaxy_type, config, lensing_func =apply_lensing , weights_str="none"): 
+def calculate_alpha_simple_DESI_individual_cuts(data, kappa, galaxy_type, config, lensing_func=apply_lensing, weights_str="none", zmin=None, zmax=None): 
     """Function to calculate the simple estimate for alpha for survey X
 
     Args:
@@ -537,6 +717,8 @@ def calculate_alpha_simple_DESI_individual_cuts(data, kappa, galaxy_type, config
         lensing_func (func, optional): Function to apply lensing to the data. Defaults to apply_lensing_v3.
         show_each_condition (bool, optional): Print out more details. Defaults to True.
         weights_str (str, optional): Weights for each galaxy. Defaults to "baseline".
+        zmin (float, optional): Lower edge of the analysis redshift bin. Defaults to None.
+        zmax (float, optional): Upper edge of the analysis redshift bin. Defaults to None.
 
     Returns:
         float: simple alpha estimate
@@ -548,11 +730,11 @@ def calculate_alpha_simple_DESI_individual_cuts(data, kappa, galaxy_type, config
     #postivite kappa: increase #gal at faint end. 
     #convention: left-sided derivative on the faint end. So need minus sign
     data_mag = lensing_func(data,  kappa, galaxy_type, config)
-    combined_left = apply_all_cuts_individual_cuts(data_mag, galaxy_type, config, verbose=True)
+    combined_left = apply_all_cuts_individual_cuts(data_mag, galaxy_type, config, verbose=True, zmin=zmin, zmax=zmax)
 
     if(config.getboolean("individual_cuts","validate_individual_cuts")):
         print("validating individual cuts left")
-        combined_left_validation = apply_all_cuts(data_mag, galaxy_type, config, verbose=True)
+        combined_left_validation = apply_all_cuts(data_mag, galaxy_type, config, verbose=True, zmin=zmin, zmax=zmax)
         combined_left_sum = np.ones(len(combined_left),dtype=bool)
         for key in combined_left.colnames:
             combined_left_sum &= combined_left[key]
@@ -560,10 +742,10 @@ def calculate_alpha_simple_DESI_individual_cuts(data, kappa, galaxy_type, config
 
     #other side
     data_mag = lensing_func(data,  -1.*kappa, galaxy_type, config)
-    combined_right = apply_all_cuts_individual_cuts(data_mag, galaxy_type, config, verbose=True)
+    combined_right = apply_all_cuts_individual_cuts(data_mag, galaxy_type, config, verbose=True, zmin=zmin, zmax=zmax)
     if(config.getboolean("individual_cuts","validate_individual_cuts")):
         print("validating individual cuts right")
-        combined_right_validation = apply_all_cuts(data_mag, galaxy_type, config, verbose=True)
+        combined_right_validation = apply_all_cuts(data_mag, galaxy_type, config, verbose=True, zmin=zmin, zmax=zmax)
         combined_right_sum = np.ones(len(combined_right),dtype=bool)
         for key in combined_right.colnames:
             combined_right_sum &= combined_right[key]
@@ -585,7 +767,7 @@ def calculate_alpha_simple_DESI_individual_cuts(data, kappa, galaxy_type, config
 
 
 #calculate alpha from multiple step sizes
-def calculate_alpha_DESI(data, kappas, galaxy_type, config, lensing_func =apply_lensing , weights_str="none"):  #, use_exp_profile=False
+def calculate_alpha_DESI(data, kappas, galaxy_type, config, lensing_func=apply_lensing, weights_str="none", zmin=None, zmax=None):  #, use_exp_profile=False
     """Baseline magnification bias estimate with our binwise estimator for CMASS.
 
     Args:
@@ -622,11 +804,11 @@ def calculate_alpha_DESI(data, kappas, galaxy_type, config, lensing_func =apply_
         #postivite kappa: increase #gal at faint end. 
         #convention: left-sided derivative on the faint end. So need a minus sign
         data_mag = lensing_func(data,  kappa, galaxy_type, config)# use_exp_profile=use_exp_profile)
-        combined_left = apply_all_cuts(data_mag, galaxy_type, config)
+        combined_left = apply_all_cuts(data_mag, galaxy_type, config, zmin=zmin, zmax=zmax)
         
         #other side
         data_mag = lensing_func(data,  -1.*kappa, galaxy_type, config)# use_exp_profile=use_exp_profile)
-        combined_right = apply_all_cuts(data_mag, galaxy_type, config)
+        combined_right = apply_all_cuts(data_mag, galaxy_type, config, zmin=zmin, zmax=zmax)
 
         
         lst_left.append(combined_left)
@@ -664,5 +846,3 @@ def calculate_alpha_DESI(data, kappas, galaxy_type, config, lensing_func =apply_
 
     
     return result
-
-
