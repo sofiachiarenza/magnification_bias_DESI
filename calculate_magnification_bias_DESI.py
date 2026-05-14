@@ -100,7 +100,8 @@ for galaxy_type in galaxy_types:
             
             # Calculate alpha - single step size
             alpha_simple, alpha_simple_err = magnification_bias_DESI.calculate_alpha_simple_DESI(
-                galcat_region, kappa=0.01, galaxy_type=galaxy_type, config=config, weights_str=weights_str)
+                galcat_region, kappa=0.01, galaxy_type=galaxy_type, config=config, weights_str=weights_str,
+                zmin=z_bins[i], zmax=z_bins[i+1])
             print(f"  alpha_simple = {alpha_simple} +- {alpha_simple_err}")
             
             simple_alphas[galaxy_type][region]['alphas'].append(alpha_simple)
@@ -110,13 +111,15 @@ for galaxy_type in galaxy_types:
             if config.getboolean('general','apply_individual_cuts'):
                 print("  Applying individual cuts")
                 result_dict = magnification_bias_DESI.calculate_alpha_simple_DESI_individual_cuts(
-                    galcat_region, kappa=0.01, galaxy_type=galaxy_type, config=config, weights_str=weights_str)
+                    galcat_region, kappa=0.01, galaxy_type=galaxy_type, config=config, weights_str=weights_str,
+                    zmin=z_bins[i], zmax=z_bins[i+1])
                 alphas_individual_cuts[galaxy_type][region][f"zbin_{i}"] = result_dict
             
             # Full alpha calculation if requested
             if do_full_alpha_stepwise_calculation:
                 result = magnification_bias_DESI.calculate_alpha_DESI(
-                    galcat_region, kappas, galaxy_type=galaxy_type, config=config, weights_str=weights_str)
+                    galcat_region, kappas, galaxy_type=galaxy_type, config=config, weights_str=weights_str,
+                    zmin=z_bins[i], zmax=z_bins[i+1])
                 print(f"  alpha = {result['fit']['alpha_fit']} +- {result['fit']['alpha_fit_error']}")
                 alphas[galaxy_type][region].append(result)
     

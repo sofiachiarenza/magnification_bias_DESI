@@ -191,3 +191,34 @@ def apply_secondary_cuts_individual_cuts(data_cat,galaxy_type):
     mask1 = apply_tsnr_cut(data_cat,galaxy_type)
     mask2 = select_good_redshifts(data_cat,galaxy_type)
     return Table([mask1,mask2],names=["tsnr_cut","deltachi2_cut"])
+
+
+def apply_redshift_bin_cuts(data_table, zmin=None, zmax=None, zcol='Z'):
+    """Return a boolean mask keeping galaxies within [zmin, zmax).
+
+    If neither zmin nor zmax is given, returns an all-True mask.
+
+    Parameters
+    ----------
+    data_table : astropy.table.Table
+        Galaxy catalogue.
+    zmin : float, optional
+        Lower redshift edge (inclusive).
+    zmax : float, optional
+        Upper redshift edge (exclusive).
+    zcol : str, optional
+        Name of the redshift column.  Defaults to ``'Z'``.
+
+    Returns
+    -------
+    mask : np.ndarray of bool
+        Boolean mask of length ``len(data_table)``.
+    """
+    if zmin is None and zmax is None:
+        return np.ones(len(data_table), dtype=bool)
+    mask = np.ones(len(data_table), dtype=bool)
+    if zmin is not None:
+        mask &= (data_table[zcol] >= zmin)
+    if zmax is not None:
+        mask &= (data_table[zcol] < zmax)
+    return mask
