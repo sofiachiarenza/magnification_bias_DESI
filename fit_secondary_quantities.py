@@ -17,9 +17,8 @@ def fit_power_law(xdata, ydata):
 
     return params
 
-def using_mpl_scatter_density(fig, x, y, cbar_label=None):
-    import mpl_scatter_density
-    from matplotlib.colors import LinearSegmentedColormap
+def plot_density_hist2d(fig, x, y, cbar_label=None, bins=200):
+    from matplotlib.colors import LinearSegmentedColormap, LogNorm
     # "Viridis-like" colormap with white background
     white_viridis = LinearSegmentedColormap.from_list('white_viridis', [
         (0, '#ffffff'),
@@ -31,9 +30,11 @@ def using_mpl_scatter_density(fig, x, y, cbar_label=None):
         (1, '#fde624'),
     ], N=256)
 
-    ax = fig.add_subplot(1, 1, 1, projection='scatter_density')
-    density = ax.scatter_density(x, y, cmap=white_viridis)
-    fig.colorbar(density, label=cbar_label)
+    ax = fig.add_subplot(1, 1, 1)
+    xbins = np.geomspace(np.min(x), np.max(x), bins)
+    ybins = np.geomspace(np.min(y), np.max(y), bins)
+    counts, _, _, im = ax.hist2d(x, y, bins=[xbins, ybins], cmap=white_viridis, norm=LogNorm())
+    fig.colorbar(im, ax=ax, label=cbar_label)
     return ax
 
 def fit_secondary_quantities(config):
@@ -98,7 +99,7 @@ def fit_secondary_quantities(config):
 
             # Plotting the data and the fitted curve
             fig = plt.figure()
-            ax = using_mpl_scatter_density(fig, xdata, ydata)
+            ax = plot_density_hist2d(fig, xdata, ydata)
 
             xarr = np.geomspace(np.min(xdata),np.max(xdata),100)
             plt.plot(xarr, power_law(xarr, *params), label='Fit')

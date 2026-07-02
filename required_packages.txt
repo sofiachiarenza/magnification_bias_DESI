@@ -1,6 +1,5 @@
 
 matplotlib
-mpl_scatter_density
 scipy
 numpy
 astropy
