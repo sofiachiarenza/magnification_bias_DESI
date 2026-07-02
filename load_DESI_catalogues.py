@@ -260,9 +260,13 @@ def load_photo_data(galaxy_type, columns, region_name='des'):
         Filtered photometric catalog
     """
     import sys
-    scripts_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'DESI_Y3_x_CMB', 'scripts')
-    if scripts_path not in sys.path:
-        sys.path.insert(0, scripts_path)
+    _repo_root = os.path.dirname(os.path.abspath(__file__))
+    _default = os.path.join(_repo_root, '..', 'DESI_Y3_x_CMB')
+    _desi_y3_root = os.environ.get('DESI_Y3_X_CMB_PATH', _default)
+    scripts_path = os.path.join(_desi_y3_root, 'scripts')
+    for _p in [scripts_path, _desi_y3_root]:
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
 
     from DR2_analysis_utils import get_photo_sample_obj
 
