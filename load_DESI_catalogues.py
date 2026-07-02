@@ -5,6 +5,7 @@ from astropy.table import Table, join, vstack, Column
 from astropy.io import fits
 import re
 import fitsio
+from tqdm import tqdm
 
 def get_FSF_loa(indata,fsf_cols,fsf_dir='/dvs_ro/cfs/cdirs/desi/vac/dr2/fastspecfit/loa/v1.0/catalogs/',prog='bright'):
     #add the fsf_cols to the existing data based on a TARGETID match
@@ -185,13 +186,15 @@ def read_table(filename, columns=None, memmap=True, tabulatedbool=False):
 
             tab_with_weights = vstack((tab_NGC, tab_SGC))
             data = join(data, tab_with_weights, keys="TARGETID",join_type="inner")
-            
+            print(f"Matched weights, {len(data)} galaxies remain")
+
             if tabulatedbool:
                 axis_ratio = np.zeros(len(data['RA']))
                 sersic = np.zeros(len(data['RA']))
                 gaia_gmag = np.zeros(len(data['RA']))
                 pix = hp.ang2pix(8,data['RA'],data['DEC'],lonlat=True,nest=True)
-                for ppix in np.unique(pix):
+                unique_pix = np.unique(pix)
+                for ppix in tqdm(unique_pix, desc="Matching DR9 targets by healpix"):
                     #ppix = np.unique(pix)[0]
                     sel = np.where(pix == ppix)
                     if "BGS" in os.path.basename(filename):

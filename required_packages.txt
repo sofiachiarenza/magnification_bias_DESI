@@ -5,3 +5,4 @@ numpy
 astropy
 fitsio
 h5py
+tqdm

@@ -16,6 +16,7 @@ import fitsio
 from scipy.optimize import curve_fit
 from cuts import apply_photocuts_DESI,apply_magnitude_cuts,apply_secondary_cuts,apply_photocuts_DESI_individual_cuts,apply_secondary_cuts_individual_cuts,apply_redshift_bin_cuts
 from hdf5_utils import load_dict_from_hdf5
+from tqdm import tqdm
 from scipy.interpolate import RectBivariateSpline
 from scipy.interpolate import NearestNDInterpolator
 from make_region_selections import region_selection_functions
@@ -798,18 +799,18 @@ def calculate_alpha_DESI(data, kappas, galaxy_type, config, lensing_func=apply_l
     #need to save the full information of which galaxies are removed especially for the case with weights
     lst_left = []
     lst_right = []
-    for i, kappa in enumerate(kappas):
-        #print(kappa)
-        #postivite kappa: increase #gal at faint end. 
+    zbin_label = f"z=[{zmin},{zmax})" if zmin is not None else ""
+    for i, kappa in enumerate(tqdm(kappas, desc=f"{galaxy_type} {zbin_label} kappa sweep", leave=False)):
+        #postivite kappa: increase #gal at faint end.
         #convention: left-sided derivative on the faint end. So need a minus sign
         data_mag = lensing_func(data,  kappa, galaxy_type, config)# use_exp_profile=use_exp_profile)
         combined_left = apply_all_cuts(data_mag, galaxy_type, config, zmin=zmin, zmax=zmax)
-        
+
         #other side
         data_mag = lensing_func(data,  -1.*kappa, galaxy_type, config)# use_exp_profile=use_exp_profile)
         combined_right = apply_all_cuts(data_mag, galaxy_type, config, zmin=zmin, zmax=zmax)
 
-        
+
         lst_left.append(combined_left)
         lst_right.append(combined_right)
 
