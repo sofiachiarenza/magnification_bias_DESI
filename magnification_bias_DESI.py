@@ -15,7 +15,7 @@ import os
 import fitsio
 from scipy.optimize import curve_fit
 from cuts import apply_photocuts_DESI,apply_magnitude_cuts,apply_secondary_cuts,apply_photocuts_DESI_individual_cuts,apply_secondary_cuts_individual_cuts,apply_redshift_bin_cuts
-import json
+from hdf5_utils import load_dict_from_hdf5
 from scipy.interpolate import RectBivariateSpline
 from scipy.interpolate import NearestNDInterpolator
 from make_region_selections import region_selection_functions
@@ -397,8 +397,7 @@ def apply_lensing(data,  kappa,  galaxy_type, config, verbose=False ):
 
 def apply_lensing_secondary_properties(data, fibermag_unmagnified, galaxy_type, config, verbose=False ):
     try:
-        with open(os.path.dirname(os.path.abspath(__file__))+os.sep+"results"+os.sep+config["general"]["version"]+os.sep+"fit_results"+os.sep+"secondary_quantity_fits.json",'r') as f:
-            fit_param_dict = json.load(f)
+        fit_param_dict = load_dict_from_hdf5(os.path.dirname(os.path.abspath(__file__))+os.sep+"results"+os.sep+config["general"]["version"]+os.sep+"fit_results"+os.sep+"secondary_quantity_fits.h5")
     except Exception as e:
         print("Error: {}".format(e))
         print("Error: Could not load the fit parameters for the secondary properties. Please run the secondary_cuts.py script first.")

@@ -1,21 +1,16 @@
+"""Measure the magnification bias parameter alpha for a DESI galaxy sample.
+
+Usage: python calculate_magnification_bias_DESI.py <config.ini>
+Loops over galaxy_types (usually one per config, see configs/) x z-bins x
+regions, computes alpha, and writes HDF5 results to [output] output_path.
+"""
 import configparser
 import sys
-#from magnification_bias_DESI import load_survey_data
 import magnification_bias_DESI
 import numpy as np
-import json
 import os
+from hdf5_utils import save_dict_to_hdf5
 
-class NpEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, np.integer):
-            return int(obj)
-        if isinstance(obj, np.floating):
-            return float(obj)
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return super(NpEncoder, self).default(obj)
-    
 config = configparser.ConfigParser()
 if len(sys.argv) > 1:
     config.read(sys.argv[1])
@@ -40,22 +35,6 @@ do_full_alpha_stepwise_calculation = config.getboolean('general','do_full_alpha_
 dkappa = config.getfloat('general','dkappa')
 dkappa_max = config.getfloat('general','dkappa_max')
 kappas = np.arange(0, dkappa_max+dkappa, dkappa)
-
-# def convert_numpy_arrays_to_lists(data):
-#     """
-#     Recursively convert numpy arrays in a nested dictionary to lists.
-    
-#     :param data: The dictionary to convert.
-#     :return: A new dictionary with numpy arrays converted to lists.
-#     """
-#     if isinstance(data, dict):
-#         return {k: convert_numpy_arrays_to_lists(v) for k, v in data.items()}
-#     elif isinstance(data, np.ndarray):
-#         return data.tolist()
-#     elif isinstance(data, list):
-#         return [convert_numpy_arrays_to_lists(item) for item in data]
-#     else:
-#         return data
 
 galaxy_types = config['general']['galaxy_types'].strip().split(',')
 for galaxy_type in galaxy_types:
@@ -137,12 +116,11 @@ os.makedirs(outpath, exist_ok=True)
 if do_full_alpha_stepwise_calculation:
     print("\nFull results:")
     print(alphas)
-    
+
     # Save full results with nested structure
     full_results = {"simple_alphas": simple_alphas, "alphas": alphas}
-    full_out_fname = out_fname.split('.')[0] + '_full.json'
-    with open(outpath + full_out_fname, 'w', encoding='utf-8') as outfile:
-        json.dump(full_results, outfile, ensure_ascii=False, indent=4, cls=NpEncoder)
+    full_out_fname = out_fname.split('.')[0] + '_full.h5'
+    save_dict_to_hdf5(outpath + full_out_fname, full_results)
     print(f"\nSaved full results to: {outpath + full_out_fname}")
 
     # Create relevant results with nested structure: {galaxy_type: {region: {...}}}
@@ -163,19 +141,16 @@ if do_full_alpha_stepwise_calculation:
                                     for i in range(len(alphas[galaxy_type][region]))]
                 }
 
-    with open(outpath + out_fname, 'w', encoding='utf-8') as outfile:
-        json.dump(relevant_results, outfile, ensure_ascii=False, indent=4, cls=NpEncoder)
+    save_dict_to_hdf5(outpath + out_fname, relevant_results)
     print(f"Saved relevant results to: {outpath + out_fname}")
 
 else:
     # Save simple results only
-    simple_alphas_fname = out_fname.split('.')[0] + '_simple.json'
-    with open(outpath + simple_alphas_fname, 'w', encoding='utf-8') as outfile:
-        json.dump(simple_alphas, outfile, ensure_ascii=False, indent=4, cls=NpEncoder)
+    simple_alphas_fname = out_fname.split('.')[0] + '_simple.h5'
+    save_dict_to_hdf5(outpath + simple_alphas_fname, simple_alphas)
     print(f"\nSaved simple results to: {outpath + simple_alphas_fname}")
 
 if config.getboolean('general', 'apply_individual_cuts'):
-    individual_cuts_out_fname = out_fname.split('.')[0] + '_individual_cuts.json'
-    with open(outpath + individual_cuts_out_fname, 'w', encoding='utf-8') as outfile:
-        json.dump(alphas_individual_cuts, outfile, ensure_ascii=False, indent=4, cls=NpEncoder)
+    individual_cuts_out_fname = out_fname.split('.')[0] + '_individual_cuts.h5'
+    save_dict_to_hdf5(outpath + individual_cuts_out_fname, alphas_individual_cuts)
     print(f"Saved individual cuts results to: {outpath + individual_cuts_out_fname}")

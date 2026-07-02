@@ -1,12 +1,12 @@
 from scipy.optimize import curve_fit
-import numpy as np  
+import numpy as np
 from  magnification_bias_DESI import get_required_columns,apply_magnitude_cuts
 from astropy.table import Table
 import fitsio
 import os
-import json
 
 from load_DESI_catalogues import read_table
+from hdf5_utils import save_dict_to_hdf5
 
 def power_law(x, a, b):
     return a * np.power(x, b)
@@ -111,10 +111,9 @@ def fit_secondary_quantities(config):
             plt.close()
 
             secondary_quantity_dict[f"{galaxy_type}_{fit_xval}_{fit_yval}"] = list(params)
-    os.makedirs(os.path.dirname(os.path.abspath(__file__))+os.sep+"results"+os.sep+config["general"]["version"]+os.sep+"fit_results"+os.sep,exist_ok=True)
-    with open(os.path.dirname(os.path.abspath(__file__))+os.sep+"results"+os.sep+config["general"]["version"]+os.sep+"fit_results"+os.sep+"secondary_quantity_fits.json", 'w', encoding='utf-8') as f:
-        json.dump(secondary_quantity_dict,f, ensure_ascii=False, indent=4)
-    #print(5/0)
+    fit_results_dir = os.path.dirname(os.path.abspath(__file__))+os.sep+"results"+os.sep+config["general"]["version"]+os.sep+"fit_results"+os.sep
+    os.makedirs(fit_results_dir,exist_ok=True)
+    save_dict_to_hdf5(fit_results_dir+"secondary_quantity_fits.h5", secondary_quantity_dict)
 
 
 if __name__ == "__main__":
