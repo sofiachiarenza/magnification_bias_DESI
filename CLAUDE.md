@@ -19,20 +19,23 @@ No `conda activate` needed — the two `source` lines provide all required packa
 
 Each spectroscopic tracer has its own config: `configs/spec_QSO.ini`, `configs/spec_LRG.ini`, `configs/spec_ELG.ini` (`ELG_LOPnotqso`). Run each independently — they write to separate output files, so nothing gets overwritten.
 
-For a single SLURM job that runs all three spec tracers together, use `configs/spec_combined.ini` instead:
+### Running as a batch job (recommended over interactive)
+
+The full stepwise calculation for a tracer can take over an hour (see "Computationally heavy parts" below), which is longer than an ssh connection to an interactive node is guaranteed to survive. Use `submit_alpha.sh` instead of running interactively:
 
 ```bash
-#!/bin/bash
-#SBATCH -N 1 -C cpu -q regular -t 04:00:00
-#SBATCH -A desicollab
-#SBATCH -J magnification_bias
-#SBATCH -o magnification_bias_%j.out
-
-source /global/common/software/desi/desi_environment.sh main
-source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
-cd /global/cfs/cdirs/desicollab/users/schiarenza/magnification_bias_DESI
-python calculate_magnification_bias_DESI.py configs/spec_combined.ini
+sbatch -J magbias_QSO submit_alpha.sh configs/spec_QSO.ini
+sbatch -J magbias_LRG submit_alpha.sh configs/spec_LRG.ini
+sbatch -J magbias_ELG submit_alpha.sh configs/spec_ELG.ini
 ```
+
+Logs land in `logs/<job-name>_<job-id>.out`. `submit_alpha.sh` requests `-N 1 -C cpu -q regular -t 04:00:00 -A desi` and sources both DESI env scripts itself, so no manual setup is needed beyond `sbatch`. For all three spec tracers in one job instead, pass `configs/spec_combined.ini`.
+
+### Computationally heavy parts
+
+- **Catalog I/O**: the `_clustering` → `_full_HPmapcut` fallback join, plus the `_NGC_clustering`/`_SGC_clustering` weight-matching join (documented as slow by design), plus (when `fiber_mag_lensing=Tabulated`, the current default) a per-healpix-pixel DR9 target match — this last one now has a `tqdm` bar (`Matching DR9 targets by healpix`).
+- **The kappa-sweep loop** (`calculate_alpha_DESI`): ~16 κ steps × 2 directions × full cut re-application, per region per z-bin — the dominant cost, especially with `regions=all,north,south,des,south+des` (5×) and multiple z-bins (LRG has 3). Now has a `tqdm` bar (`<tracer> z=[...] kappa sweep`).
+- Rough scaling from a real DA2 run: ELG (1 z-bin, 5 regions) finished end-to-end in well under an hour; LRG (3 z-bins, 5 regions, bigger catalog) is the longest of the three.
 
 ### Prerequisite: secondary quantity fits
 
@@ -81,6 +84,7 @@ Inspect with `h5ls -r <file>.h5` or `h5py.File(...)` — results are nested grou
 | `fit_secondary_quantities.py` | One-time prereq per tracer. Fits power law between fiber flux and secondary cut quantities (DELTACHI2, o2c). Saves to `results/v2/fit_results/secondary_quantity_fits.h5`. |
 | `make_region_selections.py` | Defines sky region filters: `all`, `des`, `south`, `north`, `NGC`, `SGC`, `act`, `planck`. |
 | `hdf5_utils.py` | Generic nested-dict <-> HDF5 (de)serialization used by all three scripts above, in place of JSON. |
+| `submit_alpha.sh` | SLURM batch wrapper around `calculate_magnification_bias_DESI.py` — `sbatch submit_alpha.sh <config.ini>`. |
 | `galaxy_fiber_info_files/` | Lookup tables (NPZ) for the Tabulated fiber flux correction: `rex.npz`, `dev_fiber_factor.npz`, `dev_fiber_ratio.npz`, `exp_fiber_factor.npz`, `exp_fiber_ratio.npz`. |
 | `magnification_bias_SDSS.py` | SDSS/BOSS version of the code (reference, not used for DESI). |
 

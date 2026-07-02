@@ -3,7 +3,7 @@
 #SBATCH -C cpu
 #SBATCH -q regular
 #SBATCH -t 04:00:00
-#SBATCH -A desicollab
+#SBATCH -A desi
 #SBATCH -J magbias
 #SBATCH -o logs/%x_%j.out
 
