@@ -6,7 +6,7 @@ import fitsio
 import os
 
 from load_DESI_catalogues import read_table
-from hdf5_utils import save_dict_to_hdf5
+from hdf5_utils import save_dict_to_hdf5, load_dict_from_hdf5
 
 def power_law(x, a, b):
     return a * np.power(x, b)
@@ -114,7 +114,17 @@ def fit_secondary_quantities(config):
             secondary_quantity_dict[f"{galaxy_type}_{fit_xval}_{fit_yval}"] = list(params)
     fit_results_dir = os.path.dirname(os.path.abspath(__file__))+os.sep+"results"+os.sep+config["general"]["version"]+os.sep+"fit_results"+os.sep
     os.makedirs(fit_results_dir,exist_ok=True)
-    save_dict_to_hdf5(fit_results_dir+"secondary_quantity_fits.h5", secondary_quantity_dict)
+    fit_results_path = fit_results_dir+"secondary_quantity_fits.h5"
+
+    # Merge with any existing fits (e.g. from a previous run with a different
+    # galaxy_type) instead of overwriting them -- configs now cover one
+    # tracer at a time, so each run should only touch its own entries.
+    merged_dict = {}
+    if os.path.exists(fit_results_path):
+        merged_dict = load_dict_from_hdf5(fit_results_path)
+    merged_dict.update(secondary_quantity_dict)
+
+    save_dict_to_hdf5(fit_results_path, merged_dict)
 
 
 if __name__ == "__main__":
