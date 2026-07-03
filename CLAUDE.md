@@ -87,8 +87,7 @@ Inspect with `h5ls -r <file>.h5` or `h5py.File(...)` — results are nested grou
 | `make_region_selections.py` | Defines sky region filters: `all`, `des`, `south`, `north`, `NGC`, `SGC`, `act`, `planck`. |
 | `hdf5_utils.py` | Generic nested-dict <-> HDF5 (de)serialization used by all three scripts above, in place of JSON. |
 | `submit_alpha.sh` | SLURM batch wrapper around `calculate_magnification_bias_DESI.py` — `sbatch submit_alpha.sh <config.ini>`. |
-| `galaxy_fiber_info_files/` | Lookup tables (NPZ) for the Tabulated fiber flux correction: `rex.npz`, `dev_fiber_factor.npz`, `dev_fiber_ratio.npz`, `exp_fiber_factor.npz`, `exp_fiber_ratio.npz`. |
-| `magnification_bias_SDSS.py` | SDSS/BOSS version of the code (reference, not used for DESI). |
+| `galaxy_fiber_info_files/` | Lookup tables (NPZ) for the Tabulated fiber flux correction: `rex.npz`, `dev_fiber_factor.npz`, `exp_fiber_factor.npz`. |
 
 ---
 
@@ -96,9 +95,7 @@ Inspect with `h5ls -r <file>.h5` or `h5py.File(...)` — results are nested grou
 
 - `configs/spec_QSO.ini`, `configs/spec_LRG.ini`, `configs/spec_ELG.ini` — one tracer each, the day-to-day spectroscopic configs.
 - `configs/spec_combined.ini` — all 3 spec tracers in one run, for a single SLURM submission.
-- `configs/legacy/` — older Y1-era configs, each varying one knob relative to the BGS_BRIGHT+LRG baseline: `config21p5.ini` (BGS abs-mag cut at 21.5), `config_no_secondary_cuts.ini` (disables secondary property propagation), `config_exponentialprofile.ini` (exponential-profile fiber correction), `config_nofibermagnificationcorrection.ini` (fiber correction disabled).
-
-A photometric-sample config (`configs/spec_phot.ini` or similar, covering `BGS_phot`/`LRG_phot`) is planned but not yet created — see "Photometric samples" below.
+- `configs/spec_photo.ini` — `BGS_phot`/`LRG_phot`, currently scoped to `regions=des_photo-only` only — see "Photometric samples" below.
 
 ```ini
 # configs/spec_LRG.ini
@@ -131,7 +128,7 @@ The `regions` config key (comma-separated) applies a spatial/footprint cut on to
 
 **Standing conventions:**
 - Spectroscopic configs (`configs/spec_QSO.ini`, `spec_LRG.ini`, `spec_ELG.ini`) always measure `regions=all,north,south,des,south+des`.
-- The future photometric config will always measure `regions=act,planck,des_photo-only` (these three exist mainly for the CMB-lensing cross-correlation work on photometric samples). Not built yet — placeholder for that task.
+- `configs/spec_photo.ini` currently measures `regions=des_photo-only` only. It'll eventually also measure `act,planck` (the CMB-lensing cross-correlation footprints) once the gaps noted in "Photometric samples" below are fixed.
 
 ---
 
@@ -149,13 +146,20 @@ The `regions` config key (comma-separated) applies a spatial/footprint cut on to
 
 ## Photometric samples (BGS_phot, LRG_phot)
 
-Not yet in a dedicated config — planned as a fourth config file using the same pipeline. They require the `DESI_Y3_x_CMB` package:
+`configs/spec_photo.ini` runs `galaxy_types=BGS_phot,LRG_phot` with `regions=des_photo-only`. They require the `DESI_Y3_x_CMB` package:
 ```bash
 export DESI_Y3_X_CMB_PATH=/pscratch/sd/s/schiaren/DESI_Y3_x_CMB_AMR
 ```
-When building that config: set `galaxy_types=BGS_phot,LRG_phot` and `regions=act,planck,des_photo-only` (see "Regions" above).
+(Points at pscratch, which NERSC purges after long inactivity — a known, accepted risk for now, not a repo concern.)
 
-Known gap: `make_region_selections.py`'s `act`/`planck` selectors still do a bare `import DESI_Y3_x_CMB`, which isn't covered by the `DESI_Y3_X_CMB_PATH` env-var fix in `load_DESI_catalogues.py` — needs `DESI_Y3_x_CMB` importable via `sys.path` under exactly that name, or a matching fix in `make_region_selections.py`, before act/planck regions will work.
+`fit_secondary_quantities.py` is **not** a prerequisite for this config — `cuts.py`'s `apply_secondary_cuts`/`apply_secondary_cuts_individual_cuts` hardcode a skip for `BGS_phot`/`LRG_phot`, so there's no `secondary_quantity_fits.h5` entry needed for these two types (unlike LRG/ELG).
+
+`des_photo-only` needs no further fixes — it's a special case handled directly in `apply_region_selection` (`des` imaging region + `DEC < -19.6`) that never touches `DESI_Y3_x_CMB`'s lensing-mask code.
+
+**Known gaps, blocking `act`/`planck` only (deferred, not needed for `des_photo-only`):**
+- `make_region_selections.py:68-69`'s `act`/`planck` selectors import from `DESI_Y3_x_CMB.source_code.auxiliary.*`, but that module path doesn't exist in the actual package — the real path is `DESI_Y3_x_CMB.auxiliary.*` (matching what `load_DESI_catalogues.py` successfully imports from). Also has no `DESI_Y3_X_CMB_PATH`/`sys.path` handling at all, unlike `load_photo_data`.
+- `load_photo_data` (`load_DESI_catalogues.py:248`) always loads with `region_name='des'` (the default; never overridden by its caller in `magnification_bias_DESI.py`) — harmless for `des_photo-only` since that region is a subset of `des`, but wrong for `act`/`planck`, which aren't.
+- Unverified: `weight_phot` weighting (`magnification_bias_DESI.py:424-425`) needs a `Z_WEIGHT` column that isn't explicitly requested anywhere in this repo — whether it's present depends on `DESI_Y3_x_CMB`'s `PhotoSample` internals. Check `gal_tab.colnames` on a real run before trusting `weights_BGS_phot=weight_phot`/`weights_LRG_phot=weight_phot`.
 
 ---
 

@@ -3,24 +3,6 @@ from istarget import (select_lrg,select_bgs_bright,select_bgs_phot,select_lrg_in
 select_elg_lopnotqso,select_elg_lopnotqso_individual_cuts,select_elg_notqso,select_qso,select_qso_individual_cuts)
 from astropy.table import Table
 
-# def get_redshift_bins(galaxy_type):
-#     if(galaxy_type == "LRG"):
-#         return np.array([0.4,0.6,0.8,1.1])
-#     elif(galaxy_type=="BGS_BRIGHT"):
-#         return np.array([0.1,0.2,0.3,0.4])
-#     elif (galaxy_type[:3]=='ELG'):
-#         return np.array([0.8, 1.1, 1.6])
-#     else:
-#         raise ValueError("Invalid value of galaxy_type in get_redshift_bins. Allowed: [BGS_BRIGHT,LRG]. Here: {}".format(galaxy_type))
-
-# def get_magnitude_cuts(galaxy_type):
-#     if(galaxy_type[:3] in ["LRG","ELG"]):
-#         return None
-#     elif(galaxy_type=="BGS_BRIGHT"):
-#         return -1.*np.array([19.5,20.5,21.0])
-#     else:
-#         raise ValueError("Invalid value of galaxy_type in get_magnitude_cuts. Allowed: [BGS_BRIGHT,LRG]. Here: {}".format(galaxy_type))
-
 def create_redshift_mask(reference_redshifts,z_bins_lens):
     if z_bins_lens is None:
         return np.ones(len(reference_redshifts),dtype=bool)

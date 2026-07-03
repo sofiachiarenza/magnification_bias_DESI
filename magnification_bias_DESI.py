@@ -680,7 +680,6 @@ def calculate_alpha_simple_DESI(data, kappa, galaxy_type, config, lensing_func=a
     #postivite kappa: increase #gal at faint end. 
     #convention: left-sided derivative on the faint end. So need minus sign
     data_mag = lensing_func(data,  kappa, galaxy_type, config)
-    #print(5/0)
 
     combined_left = apply_all_cuts(data_mag, galaxy_type, config, verbose=True, zmin=zmin, zmax=zmax)
     

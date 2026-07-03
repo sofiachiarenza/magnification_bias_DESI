@@ -83,7 +83,6 @@ def fit_secondary_quantities(config):
 
             if not np.all(mask):
                 print(f"Warning: {np.sum(~mask)} of {len(mask)} points are not positive, so they are not considered.")
-                #print(5/0)
 
             xdata = xdata[mask]
             ydata = ydata[mask]
