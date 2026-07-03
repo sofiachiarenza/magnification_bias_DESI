@@ -24,6 +24,7 @@ from make_region_selections import region_selection_functions
 
 
 import copy
+import multiprocessing as mp
 
 from load_DESI_catalogues import read_table, load_photo_data
 
@@ -766,6 +767,19 @@ def calculate_alpha_simple_DESI_individual_cuts(data, kappa, galaxy_type, config
     return result_dict
 
 
+# Module-level state for the parallel kappa sweep below. Workers are forked
+# (not spawned) after this is populated, so they inherit it via copy-on-write
+# instead of it being pickled per task -- only the small (kappa, sign) tuple
+# passed to each task actually gets pickled.
+_kappa_worker_state = None
+
+def _kappa_worker(kappa_and_sign):
+    kappa, sign = kappa_and_sign
+    data, galaxy_type, config, lensing_func, zmin, zmax = _kappa_worker_state
+    data_mag = lensing_func(data, sign * kappa, galaxy_type, config)
+    return apply_all_cuts(data_mag, galaxy_type, config, zmin=zmin, zmax=zmax)
+
+
 #calculate alpha from multiple step sizes
 def calculate_alpha_DESI(data, kappas, galaxy_type, config, lensing_func=apply_lensing, weights_str="none", zmin=None, zmax=None):  #, use_exp_profile=False
     """Baseline magnification bias estimate with our binwise estimator for CMASS.
@@ -797,22 +811,24 @@ def calculate_alpha_DESI(data, kappas, galaxy_type, config, lensing_func=apply_l
     assert kappas[0] == 0. , print("Error: kappa list should start with zero, kappas[0] = {}".format(kappas[0]))
 
     #need to save the full information of which galaxies are removed especially for the case with weights
-    lst_left = []
-    lst_right = []
+    #each (kappa, sign) pair is an independent lens+recut pass, so run them
+    #as separate processes instead of serially -- this is the dominant cost
+    #of the pipeline (see CLAUDE.md "Computationally heavy parts").
     zbin_label = f"z=[{zmin},{zmax})" if zmin is not None else ""
-    for i, kappa in enumerate(tqdm(kappas, desc=f"{galaxy_type} {zbin_label} kappa sweep", leave=False)):
-        #postivite kappa: increase #gal at faint end.
-        #convention: left-sided derivative on the faint end. So need a minus sign
-        data_mag = lensing_func(data,  kappa, galaxy_type, config)# use_exp_profile=use_exp_profile)
-        combined_left = apply_all_cuts(data_mag, galaxy_type, config, zmin=zmin, zmax=zmax)
+    tasks = [(kappa, sign) for kappa in kappas for sign in (1., -1.)]
+    n_workers = min(len(tasks), mp.cpu_count())
 
-        #other side
-        data_mag = lensing_func(data,  -1.*kappa, galaxy_type, config)# use_exp_profile=use_exp_profile)
-        combined_right = apply_all_cuts(data_mag, galaxy_type, config, zmin=zmin, zmax=zmax)
+    global _kappa_worker_state
+    _kappa_worker_state = (data, galaxy_type, config, lensing_func, zmin, zmax)
+    ctx = mp.get_context("fork")
+    with ctx.Pool(n_workers) as pool:
+        results = list(tqdm(
+            pool.imap(_kappa_worker, tasks, chunksize=1),
+            total=len(tasks), desc=f"{galaxy_type} {zbin_label} kappa sweep", leave=False))
+    _kappa_worker_state = None
 
-
-        lst_left.append(combined_left)
-        lst_right.append(combined_right)
+    lst_left = results[0::2]
+    lst_right = results[1::2]
 
     dNs, dNs_error, dNs_bins, dNs_bins_error = get_dN(lst_left, lst_right, weights=weights)
 
