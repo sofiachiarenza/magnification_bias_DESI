@@ -87,6 +87,7 @@ Inspect with `h5ls -r <file>.h5` or `h5py.File(...)` — results are nested grou
 | `make_region_selections.py` | Defines sky region filters: `all`, `des`, `south`, `north`, `NGC`, `SGC`, `act`, `planck`. |
 | `hdf5_utils.py` | Generic nested-dict <-> HDF5 (de)serialization used by all three scripts above, in place of JSON. |
 | `submit_alpha.sh` | SLURM batch wrapper around `calculate_magnification_bias_DESI.py` — `sbatch submit_alpha.sh <config.ini>`. |
+| `notebooks/summarize_alpha_results.ipynb` | Loads `measurements/v2/*.h5`, tabulates α (and the derived slope `s = 0.4·α` used by `Blast.jl`) per tracer/region/z-bin. |
 | `galaxy_fiber_info_files/` | Lookup tables (NPZ) for the Tabulated fiber flux correction: `rex.npz`, `dev_fiber_factor.npz`, `exp_fiber_factor.npz`. |
 
 ---

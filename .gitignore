@@ -164,3 +164,4 @@ validation_plots/
 results/
 measurements/
 logs/
+notebooks/alpha_summary.csv
