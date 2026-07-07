@@ -2,7 +2,7 @@
 #SBATCH -N 1
 #SBATCH -C cpu
 #SBATCH -q regular
-#SBATCH -t 04:00:00
+#SBATCH -t 08:00:00
 #SBATCH -A desi
 #SBATCH -J magbias
 #SBATCH -o logs/%x_%j.out
