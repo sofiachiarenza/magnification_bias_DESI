@@ -162,9 +162,9 @@ def read_table(filename, columns=None, memmap=True, tabulatedbool=False):
             print("Trying to match from full_HPmapcut file")
             not_available_columns = list(set(not_available_columns)-set(['WEIGHT_FKP']))
             if "DA2" in filename:
-                tab_full_HPmapcut = read_table(filename.replace("_clustering","_full_HPmapcut").replace("nonKP",""),columns=["TARGETID"]+not_available_columns,memmap=memmap)
+                tab_full_HPmapcut = read_table(filename.replace("_zcmb_clustering","_clustering").replace("_clustering","_full_HPmapcut").replace("nonKP",""),columns=["TARGETID"]+not_available_columns,memmap=memmap)
             else:
-                tab_full_HPmapcut = read_table(filename.replace("_clustering","_full_HPmapcut"),columns=["TARGETID"]+not_available_columns,memmap=memmap)
+                tab_full_HPmapcut = read_table(filename.replace("_zcmb_clustering","_clustering").replace("_clustering","_full_HPmapcut"),columns=["TARGETID"]+not_available_columns,memmap=memmap)
 
             if len(np.unique(tab_full_HPmapcut["TARGETID"]))!=len(tab_full_HPmapcut["TARGETID"]):
                 print("WARNING: TARGETID not unique in full_HPmapcut file: {} vs {}".format(np.unique(len(tab_full_HPmapcut["TARGETID"])),len(tab_full_HPmapcut["TARGETID"])))

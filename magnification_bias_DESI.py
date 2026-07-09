@@ -79,7 +79,9 @@ def load_survey_data(galaxy_type,config,zmin=None,zmax=None,debug=False):
     else:
         tabulatedbool=False
     if "DA2" in config['general']['full_lss_path']:
-        gal_tab = read_table(fpath_gal+os.sep+version+os.sep+"nonKP/"+f"{galaxy_type}_clustering.dat.fits",columns=load_columns,tabulatedbool=tabulatedbool)
+        use_zcmb = config.getboolean('general', 'use_zcmb', fallback=False)
+        zcmb_tag = "_zcmb" if use_zcmb else ""
+        gal_tab = read_table(fpath_gal+os.sep+version+os.sep+"nonKP/"+f"{galaxy_type}{zcmb_tag}_clustering.dat.fits",columns=load_columns,tabulatedbool=tabulatedbool)
     else:
         gal_tab = read_table(fpath_gal+os.sep+version+os.sep+f"{galaxy_type}_clustering.dat.fits",columns=load_columns,tabulatedbool=tabulatedbool)
     #gal_tab_SGC = read_table(fpath_gal+os.sep+version+os.sep+f"{galaxy_type}_SGC_clustering.dat.fits",columns=load_columns)
