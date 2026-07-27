@@ -6,6 +6,8 @@ __pycache__/
 # C extensions
 *.so
 
+magbias/
+
 # Distribution / packaging
 .Python
 build/
@@ -165,3 +167,6 @@ results/
 measurements/
 logs/
 notebooks/alpha_summary.csv
+
+# Cluster-local data (Narval), symlinked from PNG_DR2/nersc_data/ or transferred directly
+nersc_data/
