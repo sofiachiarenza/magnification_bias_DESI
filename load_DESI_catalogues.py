@@ -245,6 +245,76 @@ def read_table(filename, columns=None, memmap=True, tabulatedbool=False):
     return data
 
 
+def read_table_fnl(fpath_lss, version, galaxy_type, zcmb_tag, columns, memmap=True, tabulatedbool=False):
+    """Load a per-cap fNL/ clustering catalogue (NGC+SGC vstacked) for `galaxy_type`.
+
+    The fNL/ per-cap files carry newer imaging-systematics weight columns
+    (e.g. WEIGHT_IMLIN_FINEZBIN_ALLEBVCMB) that are not yet baked into the
+    combined nonKP/ clustering file, but they are missing most of the
+    photometric-cut columns that the combined file carries. Those missing
+    columns are joined in explicitly here from
+    v2/{galaxy_type}_full_HPmapcut.dat.fits -- NOT via read_table's automatic
+    "_clustering" fallback machinery, which derives the full_HPmapcut path by
+    string-replacing "nonKP" and "_zcmb_clustering" out of the filename. That
+    derivation breaks for fNL/ per-cap filenames: they contain neither
+    "nonKP" nor a bare "_zcmb_clustering" substring, only
+    "_zcmb_NGC_clustering" / "_zcmb_SGC_clustering", so the generic fallback
+    would try (and fail) to open a nonexistent
+    "LRG_zcmb_NGC_full_HPmapcut.dat.fits".
+    """
+    fnl_dir = fpath_lss + os.sep + version + os.sep + "fNL" + os.sep
+    tables = []
+    for cap in ["NGC", "SGC"]:
+        fname = fnl_dir + f"{galaxy_type}{zcmb_tag}_{cap}_clustering.dat.fits"
+        with fits.open(fname, memmap=memmap) as hdul:
+            cap_columns = hdul[1].columns.names
+            available_columns = [c for c in columns if c in cap_columns]
+            if "TARGETID" not in available_columns:
+                available_columns = ["TARGETID"] + available_columns
+            tables.append(hdul_to_table(hdul, columns=available_columns))
+    gal_tab = vstack(tables)
+    print(f"Loaded {len(gal_tab)} {galaxy_type} galaxies from fNL/ NGC+SGC per-cap files")
+
+    missing_columns = [c for c in columns if c not in gal_tab.colnames]
+    if len(missing_columns) > 0:
+        full_hpmapcut_fname = fpath_lss + os.sep + version + os.sep + f"{galaxy_type}_full_HPmapcut.dat.fits"
+        print(f"Columns {missing_columns} not available in fNL/ per-cap files, joining from {full_hpmapcut_fname}")
+        tab_full_HPmapcut = read_table(full_hpmapcut_fname, columns=["TARGETID"] + missing_columns, memmap=memmap)
+        if len(np.unique(tab_full_HPmapcut["TARGETID"])) != len(tab_full_HPmapcut["TARGETID"]):
+            print("WARNING: TARGETID not unique in full_HPmapcut file: {} vs {}".format(
+                len(np.unique(tab_full_HPmapcut["TARGETID"])), len(tab_full_HPmapcut["TARGETID"])))
+            tab_full_HPmapcut = cut_to_unique_TARGETID(tab_full_HPmapcut)
+        len_before = len(gal_tab)
+        gal_tab = join(gal_tab, tab_full_HPmapcut, keys="TARGETID", join_type="inner")
+        len_after = len(gal_tab)
+        if not len_before == len_after:
+            print(f"Length mismatch: {len_before} vs {len_after}, full_HPmapcut file {len(tab_full_HPmapcut)}")
+            print(f"Number of missing TARGETIDs: {len_before - len_after}")
+
+    if tabulatedbool:
+        axis_ratio = np.zeros(len(gal_tab['RA']))
+        sersic = np.zeros(len(gal_tab['RA']))
+        gaia_gmag = np.zeros(len(gal_tab['RA']))
+        pix = hp.ang2pix(8, gal_tab['RA'], gal_tab['DEC'], lonlat=True, nest=True)
+        unique_pix = np.unique(pix)
+        for ppix in tqdm(unique_pix, desc="Matching DR9 targets by healpix"):
+            sel = np.where(pix == ppix)
+            # LRG is dark-time only; mirrors the else-branch of read_table's
+            # equivalent block, which only special-cases "BGS" in filename.
+            targ = fits.open('/global/cfs/cdirs/desi/target/catalogs/dr9/1.1.1/targets/main/resolve/dark/targets-dark-hp-%i.fits' % ppix)[1].data
+            joined_cat = join(gal_tab[sel], targ, keys='TARGETID')
+            ellipticity = (joined_cat['SHAPE_E1']**2 + joined_cat['SHAPE_E2']**2)**0.5
+            axis_ratio[sel] = (1 + ellipticity) / (1 - ellipticity)
+            sersic[sel] = joined_cat['SERSIC']
+            gaia_gmag[sel] = joined_cat['GAIA_PHOT_G_MEAN_MAG']
+        gal_tab.add_column(Column(axis_ratio, name='AXIS_RATIO'), index=0)
+        gal_tab.add_column(Column(sersic, name='SERSIC'), index=0)
+        gal_tab.add_column(Column(gaia_gmag, name='GAIA_GMAG'), index=0)
+
+    assert not is_table_masked(gal_tab), f"fNL table for {galaxy_type}{zcmb_tag} is masked"
+    return gal_tab
+
+
 def load_photo_data(galaxy_type, columns, region_name='des'):
     """Load photometric galaxy data using the DESI_Y3_x_CMB PhotoSample loader.
 

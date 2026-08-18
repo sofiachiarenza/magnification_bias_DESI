@@ -26,7 +26,7 @@ from make_region_selections import region_selection_functions
 import copy
 import multiprocessing as mp
 
-from load_DESI_catalogues import read_table, load_photo_data
+from load_DESI_catalogues import read_table, load_photo_data, read_table_fnl
 
 def load_survey_data(galaxy_type,config,zmin=None,zmax=None,debug=False):
     # Configurable redshift column
@@ -78,14 +78,22 @@ def load_survey_data(galaxy_type,config,zmin=None,zmax=None,debug=False):
         tabulatedbool=True
     else:
         tabulatedbool=False
+    # Opt-in per galaxy type: load from fNL/ per-cap (NGC/SGC) clustering
+    # files instead of the standard nonKP/ combined file, to get access to
+    # newer imaging-systematics weight columns not yet baked into the
+    # combined file (e.g. WEIGHT_IMLIN_FINEZBIN_ALLEBVCMB for LRG).
+    use_fnl_weights = config.getboolean('general', f'use_fnl_weights_{galaxy_type}', fallback=False)
+    if use_fnl_weights:
+        load_columns = list(set(load_columns + ["WEIGHT_COMP", "WEIGHT_ZFAIL", "WEIGHT_IMLIN_FINEZBIN_ALLEBVCMB"]))
     if "DA2" in config['general']['full_lss_path']:
         use_zcmb = config.getboolean('general', 'use_zcmb', fallback=False)
         zcmb_tag = "_zcmb" if use_zcmb else ""
-        gal_tab = read_table(fpath_gal+os.sep+version+os.sep+"nonKP/"+f"{galaxy_type}{zcmb_tag}_clustering.dat.fits",columns=load_columns,tabulatedbool=tabulatedbool)
+        if use_fnl_weights:
+            gal_tab = read_table_fnl(fpath_gal, version, galaxy_type, zcmb_tag, load_columns, tabulatedbool=tabulatedbool)
+        else:
+            gal_tab = read_table(fpath_gal+os.sep+version+os.sep+"nonKP/"+f"{galaxy_type}{zcmb_tag}_clustering.dat.fits",columns=load_columns,tabulatedbool=tabulatedbool)
     else:
         gal_tab = read_table(fpath_gal+os.sep+version+os.sep+f"{galaxy_type}_clustering.dat.fits",columns=load_columns,tabulatedbool=tabulatedbool)
-    #gal_tab_SGC = read_table(fpath_gal+os.sep+version+os.sep+f"{galaxy_type}_SGC_clustering.dat.fits",columns=load_columns)
-    #gal_tab = vstack((gal_tab_NGC, gal_tab_SGC))
 
     # apply the redshift cuts
     mask_zbins = np.ones(len(gal_tab),dtype=bool)
@@ -423,6 +431,11 @@ def get_weights(weights_str, data, galaxy_type):
         weights = np.ones(len(data))
     elif weights_str == 'weight_FKP':
         weights = data['WEIGHT']*data['WEIGHT_FKP']
+    elif weights_str == 'weight_imlin_fkp':
+        # WEIGHT_COMP*WEIGHT_ZFAIL*WEIGHT_IMLIN_FINEZBIN_ALLEBVCMB replaces the
+        # WEIGHT_SYS component that was baked into the old WEIGHT column,
+        # still multiplied by WEIGHT_FKP per the same WEIGHT*WEIGHT_FKP convention.
+        weights = data['WEIGHT_COMP']*data['WEIGHT_ZFAIL']*data['WEIGHT_IMLIN_FINEZBIN_ALLEBVCMB']*data['WEIGHT_FKP']
     elif weights_str == 'weight_phot':
         weights = data['Z_WEIGHT'] * data['WEIGHT_IMLIN']
     elif weights_str == 'weight':
