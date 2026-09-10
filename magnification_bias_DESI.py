@@ -26,7 +26,12 @@ from make_region_selections import region_selection_functions
 import copy
 import multiprocessing as mp
 
-from load_DESI_catalogues import read_table, load_photo_data, read_table_fnl
+from load_DESI_catalogues import read_table, load_photo_data, read_table_fnl, join_real_imaging_weight
+
+# Default location of PNG_DR2's real-data ELG linear imaging weight (see
+# get_weights' 'weight_imlin_real_fkp' option and load_survey_data below).
+# Overridable per config via real_imaging_weight_path_ELG.
+DEFAULT_ELG_REAL_IMAGING_WEIGHT_PATH = "/global/cfs/cdirs/desicollab/users/schiarenza/PNG_DR2/scripts/output/imaging_weights_real/ELG/ELG_LOPnotqso.h5"
 
 def load_survey_data(galaxy_type,config,zmin=None,zmax=None,debug=False):
     # Configurable redshift column
@@ -85,6 +90,13 @@ def load_survey_data(galaxy_type,config,zmin=None,zmax=None,debug=False):
     use_fnl_weights = config.getboolean('general', f'use_fnl_weights_{galaxy_type}', fallback=False)
     if use_fnl_weights:
         load_columns = list(set(load_columns + ["WEIGHT_COMP", "WEIGHT_ZFAIL", "WEIGHT_IMLIN_FINEZBIN_ALLEBVCMB"]))
+    # Opt-in (ELG only in practice): join PNG_DR2's real-data linear imaging
+    # weight onto this catalog by TARGETID. See get_weights'
+    # 'weight_imlin_real_fkp' and join_real_imaging_weight's docstring for why
+    # WEIGHT_SYS (needed to strip SysNet back out of WEIGHT) is loaded here.
+    use_real_imaging_weights = config.getboolean('general', f'use_real_imaging_weights_{galaxy_type}', fallback=False)
+    if use_real_imaging_weights:
+        load_columns = list(set(load_columns + ["WEIGHT_SYS"]))
     if "DA2" in config['general']['full_lss_path']:
         use_zcmb = config.getboolean('general', 'use_zcmb', fallback=False)
         zcmb_tag = "_zcmb" if use_zcmb else ""
@@ -94,6 +106,11 @@ def load_survey_data(galaxy_type,config,zmin=None,zmax=None,debug=False):
             gal_tab = read_table(fpath_gal+os.sep+version+os.sep+"nonKP/"+f"{galaxy_type}{zcmb_tag}_clustering.dat.fits",columns=load_columns,tabulatedbool=tabulatedbool)
     else:
         gal_tab = read_table(fpath_gal+os.sep+version+os.sep+f"{galaxy_type}_clustering.dat.fits",columns=load_columns,tabulatedbool=tabulatedbool)
+
+    if use_real_imaging_weights:
+        weight_path = config.get('general', f'real_imaging_weight_path_{galaxy_type}',
+                                  fallback=DEFAULT_ELG_REAL_IMAGING_WEIGHT_PATH)
+        gal_tab = join_real_imaging_weight(gal_tab, weight_path)
 
     # apply the redshift cuts
     mask_zbins = np.ones(len(gal_tab),dtype=bool)
@@ -436,6 +453,13 @@ def get_weights(weights_str, data, galaxy_type):
         # WEIGHT_SYS component that was baked into the old WEIGHT column,
         # still multiplied by WEIGHT_FKP per the same WEIGHT*WEIGHT_FKP convention.
         weights = data['WEIGHT_COMP']*data['WEIGHT_ZFAIL']*data['WEIGHT_IMLIN_FINEZBIN_ALLEBVCMB']*data['WEIGHT_FKP']
+    elif weights_str == 'weight_imlin_real_fkp':
+        # ELG's real-data linear imaging weight (PNG_DR2's
+        # fit_real_imaging_weights.py), joined in by join_real_imaging_weight.
+        # WEIGHT/WEIGHT_SYS strips out SysNet's contribution to the standard
+        # WEIGHT column; WEIGHT_IMLIN replaces it -- same convention PNG_DR2's
+        # measure_cl.py uses for its own ELG imaging_weight_override.
+        weights = (data['WEIGHT']/data['WEIGHT_SYS'])*data['WEIGHT_IMLIN']*data['WEIGHT_FKP']
     elif weights_str == 'weight_phot':
         weights = data['Z_WEIGHT'] * data['WEIGHT_IMLIN']
     elif weights_str == 'weight':

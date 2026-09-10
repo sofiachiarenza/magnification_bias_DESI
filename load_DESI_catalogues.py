@@ -315,6 +315,35 @@ def read_table_fnl(fpath_lss, version, galaxy_type, zcmb_tag, columns, memmap=Tr
     return gal_tab
 
 
+def join_real_imaging_weight(gal_tab, weight_path):
+    """Join a per-TARGETID WEIGHT_IMLIN column from an external HDF5 file onto
+    gal_tab (inner join -- unmatched TARGETIDs are dropped, same convention as
+    the full_HPmapcut joins above).
+
+    The file is produced by PNG_DR2's scripts/fit_real_imaging_weights.py: a
+    real-data linear-regression imaging-systematics weight for ELG, fit
+    against the NN/CMBLENS catalog (which never shipped a linear weight of
+    its own, only SysNet's WEIGHT_SYS). gal_tab here is loaded from nonKP/,
+    a different catalog folder with the same TARGETID set (same objects,
+    different completeness weighting) -- WEIGHT_IMLIN is a per-object,
+    redshift-independent imaging correction, so it transfers across folders
+    via TARGETID. An `_zcmb` catalog (used here) drops/adds a small number of
+    TARGETIDs relative to the plain-Z catalog the weight file was built from,
+    so the join may not be 100% -- reported below, not asserted.
+    """
+    import h5py
+    with h5py.File(weight_path, 'r') as f:
+        targetid = f['LSS']['TARGETID'][:]
+        weight_imlin = f['LSS']['WEIGHT_IMLIN'][:]
+    weight_tab = Table({'TARGETID': targetid, 'WEIGHT_IMLIN': weight_imlin})
+    len_before = len(gal_tab)
+    gal_tab = join(gal_tab, weight_tab, keys='TARGETID', join_type='inner')
+    len_after = len(gal_tab)
+    print(f"Joined real ELG WEIGHT_IMLIN from {weight_path}: {len_before} -> {len_after} galaxies "
+          f"({len_before - len_after} unmatched TARGETIDs dropped)")
+    return gal_tab
+
+
 def load_photo_data(galaxy_type, columns, region_name='des'):
     """Load photometric galaxy data using the DESI_Y3_x_CMB PhotoSample loader.
 
