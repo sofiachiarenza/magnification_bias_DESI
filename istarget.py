@@ -202,9 +202,20 @@ def select_elg_lopnotqso(cat, field='south'):
 def select_bgs_bright(cat,field='south'):
     return select_bgs(cat,field)[0]
 
+def _bgs_phot_r_faint_cut(cat):
+    """DESI_Y3_x_CMB PhotoSample BGS faint limit: r < 19.5 on the
+    MW_TRANSMISSION_R-corrected flux, in both N and S. Rongpu's
+    zp_offset_corrected fluxes already put BASS on the DECaLS system, so
+    desitarget's +0.04 BASS offset (select_bgs, field='north') must not be
+    applied -- with it, no north galaxy sits at the tested limit and alpha
+    collapses to ~0 there."""
+    return cat['FLUX_R'] / cat['MW_TRANSMISSION_R'] > 10**((22.5-19.5)/2.5)
+
 def select_bgs_phot(cat, field='south'):
-    """BGS photometric selection: BGS BRIGHT cuts + observed FIBERFLUX_R mag < 21.0"""
-    mask = select_bgs_bright(cat, field)
+    """BGS photometric selection (DESI_Y3_x_CMB PhotoSample): BGS BRIGHT cuts with
+    the faint r limit of _bgs_phot_r_faint_cut + observed FIBERFLUX_R mag < 21.0"""
+    mask = select_bgs(cat, field, faint_cut=False)[0]
+    mask &= _bgs_phot_r_faint_cut(cat)
     # Observed (NOT dereddened) FIBERFLUX_R magnitude cut
     fiberflux_r_mag = 22.5 - 2.5*np.log10(np.clip(cat['FIBERFLUX_R'], 1e-16, None))
     mask &= (fiberflux_r_mag < 21.0)
@@ -212,13 +223,14 @@ def select_bgs_phot(cat, field='south'):
 
 def select_bgs_phot_individual_cuts(cat, field='south'):
     """Individual cuts version of BGS photometric selection."""
-    mask_tab = select_bgs_bright_individual_cuts(cat, field)
+    mask_tab = select_bgs_bright_individual_cuts(cat, field, faint_cut=False)
+    mask_tab.add_column(_bgs_phot_r_faint_cut(cat), name='r < 19.5')
     # Observed (NOT dereddened) FIBERFLUX_R magnitude cut
     fiberflux_r_mag = 22.5 - 2.5*np.log10(np.clip(cat['FIBERFLUX_R'], 1e-16, None))
     mask_tab.add_column(fiberflux_r_mag < 21.0, name='fiberflux_r < 21.0')
     return mask_tab
 
-def select_bgs(cat, field='south'):
+def select_bgs(cat, field='south', faint_cut=True):
     '''
     columns = ['OBJID', 'BRICKID', 'RELEASE', 'RA', 'DEC', 'FLUX_G', 'FLUX_R', 'FLUX_Z', 'FLUX_W1', 'FLUX_IVAR_G', 'FLUX_IVAR_R', 'FLUX_IVAR_Z', 'FIBERFLUX_R', 'FIBERTOTFLUX_R', 'GAIA_PHOT_G_MEAN_MAG', 'EBV', 'MASKBITS', 'NOBS_G', 'NOBS_R', 'NOBS_Z', 'REF_CAT']
     fn = '/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/south/sweep/9.0/sweep-000p000-010p005.fits'
@@ -289,11 +301,13 @@ def select_bgs(cat, field='south'):
 
     mask_bgs_bright = mask_bgs.copy()
     if field=='south':
-        mask_bgs_bright &= cat['FLUX_R'] > 10**((22.5-19.5)/2.5)
+        if faint_cut:
+            mask_bgs_bright &= cat['FLUX_R'] > 10**((22.5-19.5)/2.5)
         mask_bgs_bright &= cat['FLUX_R'] <= 10**((22.5-12.0)/2.5)
         mask_bgs_bright &= cat['FIBERTOTFLUX_R'] <= 10**((22.5-15.0)/2.5)
     else:
-        mask_bgs_bright &= cat['FLUX_R'] > 10**((22.5-(19.5+offset))/2.5)
+        if faint_cut:
+            mask_bgs_bright &= cat['FLUX_R'] > 10**((22.5-(19.5+offset))/2.5)
         mask_bgs_bright &= cat['FLUX_R'] <= 10**((22.5-12.0)/2.5)
         mask_bgs_bright &= cat['FIBERTOTFLUX_R'] <= 10**((22.5-15.0)/2.5)
 
@@ -313,7 +327,7 @@ def select_bgs(cat, field='south'):
 
     return mask_bgs_bright, mask_bgs_faint
 
-def select_bgs_bright_individual_cuts(cat, field='south'):
+def select_bgs_bright_individual_cuts(cat, field='south', faint_cut=True):
     '''
     columns = ['OBJID', 'BRICKID', 'RELEASE', 'RA', 'DEC', 'FLUX_G', 'FLUX_R', 'FLUX_Z', 'FLUX_W1', 'FLUX_IVAR_G', 'FLUX_IVAR_R', 'FLUX_IVAR_Z', 'FIBERFLUX_R', 'FIBERTOTFLUX_R', 'GAIA_PHOT_G_MEAN_MAG', 'EBV', 'MASKBITS', 'NOBS_G', 'NOBS_R', 'NOBS_Z', 'REF_CAT']
     fn = '/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/south/sweep/9.0/sweep-000p000-010p005.fits'
@@ -380,12 +394,14 @@ def select_bgs_bright_individual_cuts(cat, field='south'):
 
 
     if field=='south':
-        mask_tab.add_column(cat['FLUX_R'] > 10**((22.5-19.5)/2.5),name='r < 19.5')
+        if faint_cut:
+            mask_tab.add_column(cat['FLUX_R'] > 10**((22.5-19.5)/2.5),name='r < 19.5')
         mask_tab.add_column(cat['FLUX_R'] <= 10**((22.5-12.0)/2.5),name='r > 12')
         mask_tab.add_column(cat['FIBERTOTFLUX_R'] <= 10**((22.5-15.0)/2.5),name='rfibtotmag > 15')
 
     else:
-        mask_tab.add_column(cat['FLUX_R'] > 10**((22.5-(19.5+offset))/2.5),name='r < 19.5')
+        if faint_cut:
+            mask_tab.add_column(cat['FLUX_R'] > 10**((22.5-(19.5+offset))/2.5),name='r < 19.5')
         mask_tab.add_column(cat['FLUX_R'] <= 10**((22.5-12.0)/2.5),name='r > 12')
         mask_tab.add_column(cat['FIBERTOTFLUX_R'] <= 10**((22.5-15.0)/2.5),name='rfibtotmag > 15')
 
