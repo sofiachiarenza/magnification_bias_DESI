@@ -79,9 +79,10 @@ Inspect with `h5ls -r <file>.h5` or `h5py.File(...)` — results are nested grou
 | File | Role |
 |---|---|
 | `calculate_magnification_bias_DESI.py` | Main entry point. Reads config, loops over galaxy types → z-bins → regions, saves HDF5. |
+| `calculate_magnification_bias_c3.py` / `run_c3_all.sh` | c3 CMB driver and its one-node launcher — see "c3 CMB samples". |
 | `magnification_bias_DESI.py` | Core physics. `load_survey_data`, `apply_lensing`, `calculate_alpha_simple_DESI`, `calculate_alpha_DESI`. |
 | `cuts.py` | Photometric and spectroscopic quality cuts. `apply_photocuts_DESI`, `apply_secondary_cuts`, `apply_magnitude_cuts`. |
-| `load_DESI_catalogues.py` | Catalog I/O. `read_table` handles missing columns by joining from full_HPmapcut files. `load_photo_data` for photometric samples (not used for spec-only runs). |
+| `load_DESI_catalogues.py` | Catalog I/O. `read_table` handles missing columns by joining from full_HPmapcut files. `read_table_percap` (per-cap files + full_HPmapcut join; used by `read_table_fnl` and `read_c3_spec_catalog`). `load_photo_data` / `get_c3_redshift_ranges` / `import_desi_y3_x_cmb` for the c3 samples. |
 | `istarget.py` | DESI photometric selection functions: `select_lrg`, `select_bgs_bright`, `select_elg_lopnotqso`, `select_qso`, etc. |
 | `fit_secondary_quantities.py` | One-time prereq per tracer. Fits power law between fiber flux and secondary cut quantities (DELTACHI2, o2c). Saves to `results/v2/fit_results/secondary_quantity_fits.h5`. |
 | `make_region_selections.py` | Defines sky region filters: `all`, `des`, `south`, `north`, `NGC`, `SGC`, `act`, `planck`. |
@@ -96,7 +97,7 @@ Inspect with `h5ls -r <file>.h5` or `h5py.File(...)` — results are nested grou
 
 - `configs/spec_QSO.ini`, `configs/spec_LRG.ini`, `configs/spec_ELG.ini` — one tracer each, the day-to-day spectroscopic configs.
 - `configs/spec_combined.ini` — all 3 spec tracers in one run, for a single SLURM submission.
-- `configs/spec_photo.ini` — `BGS_phot`/`LRG_phot`, currently scoped to `regions=des_photo-only` only — see "Photometric samples" below.
+- `configs/c3_photo.ini`, `configs/c3_spec.ini` (+ `configs/c3_secondary_fit_BGS.ini`) — the c3 CMB samples, see "c3 CMB samples" below. `configs/spec_photo.ini` is superseded by `c3_photo.ini`.
 
 ```ini
 # configs/spec_LRG.ini
@@ -129,7 +130,7 @@ The `regions` config key (comma-separated) applies a spatial/footprint cut on to
 
 **Standing conventions:**
 - Spectroscopic configs (`configs/spec_QSO.ini`, `spec_LRG.ini`, `spec_ELG.ini`) always measure `regions=all,north,south,des,south+des`.
-- `configs/spec_photo.ini` currently measures `regions=des_photo-only` only. It'll eventually also measure `act,planck` (the CMB-lensing cross-correlation footprints) once the gaps noted in "Photometric samples" below are fixed.
+- The c3 configs use DESI_Y3_x_CMB's own region definitions and selectors (incl. `act`, `planck`, `GAL040`), not the table above — see "c3 CMB samples".
 
 ---
 
@@ -145,24 +146,51 @@ The `regions` config key (comma-separated) applies a spatial/footprint cut on to
 
 ---
 
-## Photometric samples (BGS_phot, LRG_phot)
+## c3 CMB samples (photometric + spectroscopic)
 
-`configs/spec_photo.ini` runs `galaxy_types=BGS_phot,LRG_phot` with `regions=des_photo-only`. They require the `DESI_Y3_x_CMB` package:
+α for the DESI_Y3_x_CMB (c3 CMB lensing cross-correlation) samples, requested by Gerrit Farren. These runs use a separate driver, `calculate_magnification_bias_c3.py`, so the PNG configs and outputs above are untouched. DESI_Y3_x_CMB is imported **as a library** and is the source of truth for the c3 sample definitions, catalogs, regions and weights. The checkout is set by the `DESI_Y3_X_CMB_PATH` env var, default `/pscratch/sd/s/schiaren/DESI_Y3_x_CMB_upstream`. Its `configs/nersc_path_configs.yaml` points at Gerrit's prepared data in `/pscratch/sd/g/gfarren/desi_y3_x_cmb_data/`. It imports fine in the cosmodesi env (no MPI; it falls back to its fake-MPI shim).
+
+**Run** (Sofia, on one CPU interactive node):
 ```bash
-export DESI_Y3_X_CMB_PATH=/pscratch/sd/s/schiaren/DESI_Y3_x_CMB_AMR
+salloc -N 1 -C cpu -q interactive -t 04:00:00 -A desi
+bash /global/cfs/cdirs/desicollab/users/schiarenza/magnification_bias_DESI/run_c3_all.sh   # or: photo | spec
 ```
-(Points at pscratch, which NERSC purges after long inactivity — a known, accepted risk for now, not a repo concern.)
+`run_c3_all.sh` sources both env scripts and starts one background process per galaxy type, logging to `logs/c3_<galaxy_type>_<timestamp>.log`. Before the spec runs it does the one-off `BGS_BRIGHT-21.35` DELTACHI2 secondary fit (`configs/c3_secondary_fit_BGS.ini`) if it is missing.
 
-`fit_secondary_quantities.py` is **not** a prerequisite for this config — `cuts.py`'s `apply_secondary_cuts`/`apply_secondary_cuts_individual_cuts` hardcode a skip for `BGS_phot`/`LRG_phot`, so there's no `secondary_quantity_fits.h5` entry needed for these two types (unlike LRG/ELG).
+**What is measured:**
+- **`configs/c3_photo.ini`**: `BGS_phot` → BGS, and `LRG_phot` → LRG1/LRG2/LRG3.
+  - Catalogs: Gerrit's prepared `PhotoSample` files (`photo_galaxy_sample_data/<S>_<hash>.h5`), the `all` region, joined by TARGETID with the raw fluxes from Rongpu's target files.
+  - Regions (11): all, north, south, des, south+des, NGC, SGC, des_photo-only, GAL040, act, planck.
+  - Weights: `none`, `weight_phot` = `Z_WEIGHT*WEIGHT_IMLIN` (the Clgg weighting), and `weight_phot_kernel` = `Z_WEIGHT*KERNEL_WEIGHT_KAPPA*WEIGHT_IMLIN` (the Clkg weighting).
+- **`configs/c3_spec.ini`**: `BGS_BRIGHT-21.35` → BGS, `LRG` → LRG1-3, `ELG_LOPnotqso` → ELG, and `QSO` → QSO, QSO1, QSO2.
+  - Catalogs (`catalog_source=desi_y3_x_cmb`): the exact per-cap files DESI_Y3_x_CMB's `SpecSample` reads. These are Gerrit's scratch copies of v2/nonKP, with plain Z, not zcmb. ELG comes from `ELG_NNweights`, the alternative *completeness* weights; its imaging systematics weight is the default one.
+  - The photometric-cut columns these files lack are joined in from the official `v2/<TRACER>_full_HPmapcut.dat.fits`. That also supplies `FLUX_W2`, so the W2 gotcha below does not apply here.
+  - Regions (10): all, north, south, des, south+des, NGC, SGC, act, planck, GAL040. Spec north/south/des also restrict the galactic cap, as DESI_Y3_x_CMB defines them.
+  - Weights: `weight_FKP` = `WEIGHT*WEIGHT_FKP`, the full c3 weight (WEIGHT = COMP×SYS×ZFAIL), and `none` as a reference.
+- `c3_samples_<galaxy_type>` lists the DESI_Y3_x_CMB samples. Their z-ranges are read from DESI_Y3_x_CMB (`get_c3_redshift_ranges`), not repeated in our configs.
 
-`des_photo-only` needs no further fixes — it's a special case handled directly in `apply_region_selection` (`des` imaging region + `DEC < -19.6`) that never touches `DESI_Y3_x_CMB`'s lensing-mask code.
+**Weight columns (photo):**
+- `Z_WEIGHT` is the redshift re-weight that matches the photo sample's effective z to the spec sample.
+- `KERNEL_WEIGHT_KAPPA` is the lensing-kernel weight.
+- They are separate per-galaxy columns, and both are defined only for the photo samples.
+- How Gerrit builds the real-data `Z_WEIGHT` isn't in the upstream repo. Only the Abacus `exp(slope·(z_phot−z_eff))` version is, and the real-data values are not a pure exponential in z_phot.
 
-**Currently blocked (as of 2026-07-03): `configs/spec_photo.ini` cannot actually run yet.** Tried loading `BGS_phot` and hit `FileNotFoundError` on `DESI_Y3_x_CMB`'s derived-data lookup — `PhotoSample._get_derived_data_filename()` resolved to `/pscratch/sd/s/schiaren/desi_y3_x_cmb_data/photo_galaxy_sample_data/BGS_9ae5b76104.h5`, which doesn't exist. Per Sofia: the canonical derived data lives under Gerrit Farren's `/pscratch/sd/g/gfarren/`, not her own pscratch — this is a data-root path setting inside the `DESI_Y3_x_CMB_AMR` checkout itself (not a bug in this repo), same issue referenced in her Slack thread with Gerrit about the old hardcoded path. **Deferred — revisit once that's sorted.** The config (`configs/spec_photo.ini`) is otherwise ready to go.
+**How it is computed, and why it is fast.** Whether an object survives the cuts after lensing by ±κ depends on neither its region nor its weight.
+- So `compute_lensed_selections` does every lens+recut pass once, in parallel: 16 κ × ±, plus the ±0.01 simple pair and the ±0.01 individual-cuts pair.
+- Every region × weight α is then a masked, weighted sum (`alpha_from_selections`).
+- **Spec samples share a single set of passes across all their z-ranges**, because lensing leaves a spectroscopic Z unchanged.
+- **Photo samples get passes per z-bin**, because LRG photo-z shifts under lensing (`apply_lensing_to_photoz`).
+- Checks: this engine was validated bit-identical to `calculate_alpha_DESI` / `calculate_alpha_simple_DESI` / `_individual_cuts` on a masked catalogue. `c3_region_mask` reproduced all 11 of Gerrit's prepared LRG1 region catalogs TARGETID-for-TARGETID.
 
-**Known gaps, blocking `act`/`planck` only (deferred further, not needed for `des_photo-only` even once the above is fixed):**
-- `make_region_selections.py:68-69`'s `act`/`planck` selectors import from `DESI_Y3_x_CMB.source_code.auxiliary.*`, but that module path doesn't exist in the actual package — the real path is `DESI_Y3_x_CMB.auxiliary.*` (matching what `load_DESI_catalogues.py` successfully imports from). Also has no `DESI_Y3_X_CMB_PATH`/`sys.path` handling at all, unlike `load_photo_data`.
-- `load_photo_data` (`load_DESI_catalogues.py:248`) always loads with `region_name='des'` (the default; never overridden by its caller in `magnification_bias_DESI.py`) — harmless for `des_photo-only` since that region is a subset of `des`, but wrong for `act`/`planck`, which aren't.
-- Unverified: `weight_phot` weighting (`magnification_bias_DESI.py:424-425`) needs a `Z_WEIGHT` column that isn't explicitly requested anywhere in this repo — whether it's present depends on `DESI_Y3_x_CMB`'s `PhotoSample` internals. Check `gal_tab.colnames` on a real run before trusting `weights_BGS_phot=weight_phot`/`weights_LRG_phot=weight_phot`.
+**Outputs:** in `measurements/v2/c3cmb/`, one set per galaxy type × weight option:
+- `DESI_magnification_bias_c3_<galaxy_type>_<weight>.h5`, structured `{sample: {region: {alphas, alphas_error, simple_alphas, simple_alphas_error, N_galaxies}}}` plus a `metadata` group (z-ranges, κ grid, regions, config)
+- the matching `_full.h5` and `_individual_cuts.h5`
+
+The lists have one element per sample, the same layout as the PNG files with one z-bin each. Files are rewritten after every sample.
+
+**Caveat:** `Z_WEIGHT`/`KERNEL_WEIGHT_KAPPA` are stored per galaxy and are not re-evaluated at the lensing-shifted photo-z. The estimator only counts objects leaving the selection, so this is first-order correct.
+
+The old `configs/spec_photo.ini` (`regions=des_photo-only`, `weight_phot` only) is superseded by `configs/c3_photo.ini`. `load_photo_data` now uses DESI_Y3_x_CMB's `sample_factory.get_photo_sample_obj`, since the old `scripts/DR2_analysis_utils` import is gone upstream, and loads region `all` by default.
 
 ---
 

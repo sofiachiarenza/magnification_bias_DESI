@@ -26,7 +26,7 @@ from make_region_selections import region_selection_functions
 import copy
 import multiprocessing as mp
 
-from load_DESI_catalogues import read_table, load_photo_data, read_table_fnl, join_real_imaging_weight
+from load_DESI_catalogues import read_table, load_photo_data, read_table_fnl, join_real_imaging_weight, read_c3_spec_catalog, import_desi_y3_x_cmb
 
 # Default location of PNG_DR2's real-data ELG linear imaging weight (see
 # get_weights' 'weight_imlin_real_fkp' option and load_survey_data below).
@@ -97,7 +97,10 @@ def load_survey_data(galaxy_type,config,zmin=None,zmax=None,debug=False):
     use_real_imaging_weights = config.getboolean('general', f'use_real_imaging_weights_{galaxy_type}', fallback=False)
     if use_real_imaging_weights:
         load_columns = list(set(load_columns + ["WEIGHT_SYS"]))
-    if "DA2" in config['general']['full_lss_path']:
+    if config.get('general', 'catalog_source', fallback='lss') == 'desi_y3_x_cmb':
+        # c3 CMB samples: the exact per-cap files DESI_Y3_x_CMB reads
+        gal_tab = read_c3_spec_catalog(galaxy_type, config, load_columns, tabulatedbool=tabulatedbool)
+    elif "DA2" in config['general']['full_lss_path']:
         use_zcmb = config.getboolean('general', 'use_zcmb', fallback=False)
         zcmb_tag = "_zcmb" if use_zcmb else ""
         if use_fnl_weights:
@@ -461,13 +464,19 @@ def get_weights(weights_str, data, galaxy_type):
         # measure_cl.py uses for its own ELG imaging_weight_override.
         weights = (data['WEIGHT']/data['WEIGHT_SYS'])*data['WEIGHT_IMLIN']*data['WEIGHT_FKP']
     elif weights_str == 'weight_phot':
+        # DESI_Y3_x_CMB photo auto-spectrum weighting: redshift re-weight x linear imaging weight
         weights = data['Z_WEIGHT'] * data['WEIGHT_IMLIN']
+    elif weights_str == 'weight_phot_kernel':
+        # DESI_Y3_x_CMB photo cross-spectrum (Clkg) weighting: additionally the lensing-kernel weight
+        weights = data['Z_WEIGHT'] * data['KERNEL_WEIGHT_KAPPA'] * data['WEIGHT_IMLIN']
     elif weights_str == 'weight':
         if 'WEIGHT' not in data.colnames:
             import warnings
             warnings.warn("No WEIGHT column found in data. Returning weights of 1.")
             return np.ones(len(data))
         weights = data['WEIGHT']
+    else:
+        raise ValueError(f"weights_str {weights_str} not recognized")
     return weights
 
 
@@ -868,9 +877,17 @@ def calculate_alpha_DESI(data, kappas, galaxy_type, config, lensing_func=apply_l
     lst_left = results[0::2]
     lst_right = results[1::2]
 
+    return stepwise_alpha_result(lst_left, lst_right, kappas, weights)
+
+
+def stepwise_alpha_result(lst_left, lst_right, kappas, weights):
+    """Binwise alpha estimate + linear fit from the per-kappa selection masks
+    (lst_left[i] / lst_right[i]: objects still selected at +kappas[i] / -kappas[i])."""
+    N0 = np.sum(weights)
+    kappa_step = kappas[1] - kappas[0] #assuming uniform spacing
+
     dNs, dNs_error, dNs_bins, dNs_bins_error = get_dN(lst_left, lst_right, weights=weights)
 
-        
     result = {}
     result["dNs"] = dNs
     result["kappas"] = kappas
@@ -900,3 +917,123 @@ def calculate_alpha_DESI(data, kappas, galaxy_type, config, lensing_func=apply_l
 
     
     return result
+
+
+# ---------------------------------------------------------------------------
+# c3 CMB measurements (calculate_magnification_bias_c3.py)
+#
+# Which objects survive the cuts after lensing by +-kappa is a per-object
+# property: it depends on neither the sky region nor the weights. So every
+# lens+recut pass runs once per z-bin on the full-footprint catalogue, and
+# every (region, weight option) alpha is then just a weighted sum over a
+# subset of those masks -- instead of redoing the whole kappa sweep for each
+# of the ~10 regions x 2-3 weight options.
+# ---------------------------------------------------------------------------
+
+_selection_worker_state = None
+
+def _selection_worker(task):
+    kind, kappa, sign = task
+    data, galaxy_type, config, lensing_func, zmin, zmax = _selection_worker_state
+    data_mag = lensing_func(data, sign * kappa, galaxy_type, config)
+    if kind == "individual":
+        masks_tab = apply_all_cuts_individual_cuts(data_mag, galaxy_type, config, zmin=zmin, zmax=zmax)
+        return {col: np.asarray(masks_tab[col]) for col in masks_tab.colnames}
+    return np.asarray(apply_all_cuts(data_mag, galaxy_type, config, zmin=zmin, zmax=zmax))
+
+
+def compute_lensed_selections(data, kappas, galaxy_type, config, simple_kappa=0.01, individual_cuts=True,
+                              lensing_func=apply_lensing, zmin=None, zmax=None, n_workers=None):
+    """Run every lens+recut pass needed for the simple, stepwise and
+    individual-cuts estimates once, in parallel (fork, same copy-on-write
+    pattern as calculate_alpha_DESI).
+
+    Returns
+    -------
+    dict with 'stepwise_left'/'stepwise_right' (lists of bool arrays, one per
+    kappa), 'simple_left'/'simple_right' (bool arrays at +-simple_kappa) and,
+    if individual_cuts, 'individual_left'/'individual_right' ({cut: bool array}).
+    """
+    tasks = [("combined", kappa, sign) for kappa in kappas for sign in (1., -1.)]
+    tasks += [("combined", simple_kappa, 1.), ("combined", simple_kappa, -1.)]
+    if individual_cuts:
+        tasks += [("individual", simple_kappa, 1.), ("individual", simple_kappa, -1.)]
+    if n_workers is None:
+        n_workers = mp.cpu_count()
+    n_workers = max(1, min(len(tasks), n_workers))
+
+    global _selection_worker_state
+    _selection_worker_state = (data, galaxy_type, config, lensing_func, zmin, zmax)
+    ctx = mp.get_context("fork")
+    with ctx.Pool(n_workers) as pool:
+        results = list(tqdm(pool.imap(_selection_worker, tasks, chunksize=1), total=len(tasks),
+                            desc=f"{galaxy_type} z=[{zmin},{zmax}) lens+recut passes", leave=False))
+    _selection_worker_state = None
+
+    n_step = 2 * len(kappas)
+    selections = {
+        "stepwise_left": results[0:n_step:2],
+        "stepwise_right": results[1:n_step:2],
+        "simple_left": results[n_step],
+        "simple_right": results[n_step + 1],
+    }
+    if individual_cuts:
+        selections["individual_left"] = results[n_step + 2]
+        selections["individual_right"] = results[n_step + 3]
+    return selections
+
+
+def alpha_from_selections(selections, mask, weights, kappas, simple_kappa=0.01):
+    """Simple, stepwise and individual-cuts alpha for the objects in `mask`
+    (a region), from compute_lensed_selections' output. Same estimators as
+    calculate_alpha_simple_DESI / calculate_alpha_DESI /
+    calculate_alpha_simple_DESI_individual_cuts on the masked catalogue."""
+    w = np.asarray(weights)[mask]
+    out = {}
+    out["simple"] = get_alpha(selections["simple_left"][mask], selections["simple_right"][mask], simple_kappa, weights=w)
+    out["stepwise"] = stepwise_alpha_result([m[mask] for m in selections["stepwise_left"]],
+                                            [m[mask] for m in selections["stepwise_right"]], kappas, w)
+    if "individual_left" in selections:
+        n_gals = int(np.sum(mask))
+        individual = {}
+        for col, left in selections["individual_left"].items():
+            left = left[mask]
+            right = selections["individual_right"][col][mask]
+            alpha, alpha_error = get_alpha(left, right, simple_kappa, weights=w)
+            individual[col] = [alpha, alpha_error, n_gals - np.sum(left), n_gals - np.sum(right), n_gals]
+        out["individual"] = individual
+    return out
+
+
+def c3_region_mask(data, sample_type, region_name):
+    """Boolean mask selecting a DESI_Y3_x_CMB region, built from its own
+    region definitions and selector functions (sample_factory_config.yaml).
+
+    sample_type is 'spec' or 'photo'. A spec region may also restrict the
+    galactic caps (e.g. spec 'north' = NGC & north imaging), applied here via
+    GALACTIC_CAP. Photo regions Gerrit prepared catalogs for but that are not
+    declared in the photo region config (NGC, SGC, south+des, GAL040, act,
+    planck) are the single selector of that name -- the same subselection his
+    prepared files carry.
+    """
+    import_desi_y3_x_cmb()
+    from DESI_Y3_x_CMB.auxiliary import config_provider
+    from DESI_Y3_x_CMB.measurement_pipeline.region_selectors import region_selection_functions as y3_selectors
+    region_configs = config_provider["sample_factory_config"]["sample_types"][sample_type]["regions"]
+    if region_name in region_configs:
+        region_config = region_configs[region_name]
+        selector_names = [step["selector_name"] for step in region_config.get("selectors", [])]
+        galactic_caps = region_config.get("galactic_caps") if sample_type == "spec" else None
+    elif sample_type == "photo" and region_name in y3_selectors:
+        selector_names, galactic_caps = [region_name], None
+    else:
+        raise ValueError(f"Region '{region_name}' is not a DESI_Y3_x_CMB {sample_type} region. "
+                         f"Available: {sorted(region_configs)}")
+
+    mask = np.ones(len(data), dtype=bool)
+    if galactic_caps is not None and set(galactic_caps) != {"NGC", "SGC"}:
+        mask &= np.isin(np.asarray(data["GALACTIC_CAP"]), galactic_caps)
+    for selector_name in selector_names:
+        mask &= np.asarray(y3_selectors[selector_name](data), dtype=bool)
+    print(f"Region '{region_name}' ({sample_type}): selected {np.sum(mask)}/{len(data)} galaxies")
+    return mask

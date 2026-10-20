@@ -263,22 +263,41 @@ def read_table_fnl(fpath_lss, version, galaxy_type, zcmb_tag, columns, memmap=Tr
     "LRG_zcmb_NGC_full_HPmapcut.dat.fits".
     """
     fnl_dir = fpath_lss + os.sep + version + os.sep + "fNL" + os.sep
+    cap_files = {cap: fnl_dir + f"{galaxy_type}{zcmb_tag}_{cap}_clustering.dat.fits" for cap in ["NGC", "SGC"]}
+    full_hpmapcut_fname = fpath_lss + os.sep + version + os.sep + f"{galaxy_type}_full_HPmapcut.dat.fits"
+    return read_table_percap(cap_files, full_hpmapcut_fname, columns, memmap=memmap, tabulatedbool=tabulatedbool,
+                             label=f"{galaxy_type}{zcmb_tag} fNL/")
+
+
+def read_table_percap(cap_files, full_hpmapcut_fname, columns, memmap=True, tabulatedbool=False, bright=False,
+                      add_galactic_cap=False, label=""):
+    """Load per-cap clustering catalogues ({cap: path}, vstacked) and join in
+    the columns they lack from `full_hpmapcut_fname` by TARGETID.
+
+    Shared by read_table_fnl (fNL/ per-cap files) and read_c3_spec_catalog
+    (DESI_Y3_x_CMB's per-cap scratch copies). `bright` picks the bright-time
+    DR9 target files for the Tabulated fiber-correction match (BGS); dark
+    otherwise. `add_galactic_cap` records which cap file each row came from
+    in a GALACTIC_CAP column, needed by the NGC/SGC region selectors.
+    """
+    columns = list(dict.fromkeys(columns))  # drop duplicates (e.g. TARGETID requested twice), keep order
     tables = []
-    for cap in ["NGC", "SGC"]:
-        fname = fnl_dir + f"{galaxy_type}{zcmb_tag}_{cap}_clustering.dat.fits"
+    for cap, fname in cap_files.items():
         with fits.open(fname, memmap=memmap) as hdul:
             cap_columns = hdul[1].columns.names
             available_columns = [c for c in columns if c in cap_columns]
             if "TARGETID" not in available_columns:
                 available_columns = ["TARGETID"] + available_columns
-            tables.append(hdul_to_table(hdul, columns=available_columns))
+            cap_tab = hdul_to_table(hdul, columns=available_columns)
+        if add_galactic_cap:
+            cap_tab["GALACTIC_CAP"] = np.full(len(cap_tab), cap)
+        tables.append(cap_tab)
     gal_tab = vstack(tables)
-    print(f"Loaded {len(gal_tab)} {galaxy_type} galaxies from fNL/ NGC+SGC per-cap files")
+    print(f"Loaded {len(gal_tab)} galaxies from {label} {'+'.join(cap_files)} per-cap files")
 
     missing_columns = [c for c in columns if c not in gal_tab.colnames]
     if len(missing_columns) > 0:
-        full_hpmapcut_fname = fpath_lss + os.sep + version + os.sep + f"{galaxy_type}_full_HPmapcut.dat.fits"
-        print(f"Columns {missing_columns} not available in fNL/ per-cap files, joining from {full_hpmapcut_fname}")
+        print(f"Columns {missing_columns} not available in {label} per-cap files, joining from {full_hpmapcut_fname}")
         tab_full_HPmapcut = read_table(full_hpmapcut_fname, columns=["TARGETID"] + missing_columns, memmap=memmap)
         if len(np.unique(tab_full_HPmapcut["TARGETID"])) != len(tab_full_HPmapcut["TARGETID"]):
             print("WARNING: TARGETID not unique in full_HPmapcut file: {} vs {}".format(
@@ -292,6 +311,12 @@ def read_table_fnl(fpath_lss, version, galaxy_type, zcmb_tag, columns, memmap=Tr
             print(f"Number of missing TARGETIDs: {len_before - len_after}")
 
     if tabulatedbool:
+        # join() below returns rows sorted by TARGETID, so gal_tab must be
+        # TARGETID-sorted too for the per-pixel assignment to line up (it
+        # already is after the full_HPmapcut join above; this covers the
+        # no-missing-columns case).
+        gal_tab.sort("TARGETID")
+        program = "bright" if bright else "dark"
         axis_ratio = np.zeros(len(gal_tab['RA']))
         sersic = np.zeros(len(gal_tab['RA']))
         gaia_gmag = np.zeros(len(gal_tab['RA']))
@@ -299,9 +324,7 @@ def read_table_fnl(fpath_lss, version, galaxy_type, zcmb_tag, columns, memmap=Tr
         unique_pix = np.unique(pix)
         for ppix in tqdm(unique_pix, desc="Matching DR9 targets by healpix"):
             sel = np.where(pix == ppix)
-            # LRG is dark-time only; mirrors the else-branch of read_table's
-            # equivalent block, which only special-cases "BGS" in filename.
-            targ = fits.open('/global/cfs/cdirs/desi/target/catalogs/dr9/1.1.1/targets/main/resolve/dark/targets-dark-hp-%i.fits' % ppix)[1].data
+            targ = fits.open(f'/global/cfs/cdirs/desi/target/catalogs/dr9/1.1.1/targets/main/resolve/{program}/targets-{program}-hp-%i.fits' % ppix)[1].data
             joined_cat = join(gal_tab[sel], targ, keys='TARGETID')
             ellipticity = (joined_cat['SHAPE_E1']**2 + joined_cat['SHAPE_E2']**2)**0.5
             axis_ratio[sel] = (1 + ellipticity) / (1 - ellipticity)
@@ -311,8 +334,63 @@ def read_table_fnl(fpath_lss, version, galaxy_type, zcmb_tag, columns, memmap=Tr
         gal_tab.add_column(Column(sersic, name='SERSIC'), index=0)
         gal_tab.add_column(Column(gaia_gmag, name='GAIA_GMAG'), index=0)
 
-    assert not is_table_masked(gal_tab), f"fNL table for {galaxy_type}{zcmb_tag} is masked"
+    assert not is_table_masked(gal_tab), f"{label} per-cap table is masked"
     return gal_tab
+
+
+def import_desi_y3_x_cmb():
+    """Put the DESI_Y3_x_CMB checkout on sys.path (DESI_Y3_X_CMB_PATH env var,
+    default: Sofia's upstream worktree, whose configs point at Gerrit's
+    prepared c3 data) so its package can be imported as a library."""
+    import sys
+    root = os.environ.get('DESI_Y3_X_CMB_PATH', DEFAULT_DESI_Y3_X_CMB_PATH)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+
+DEFAULT_DESI_Y3_X_CMB_PATH = '/pscratch/sd/s/schiaren/DESI_Y3_x_CMB_upstream'
+
+
+def get_c3_sample_names(galaxy_type, config):
+    """DESI_Y3_x_CMB sample names (e.g. LRG1,LRG2,LRG3) measured for a magbias
+    galaxy_type, from the config key c3_samples_<galaxy_type>."""
+    return [s.strip() for s in config['general'][f'c3_samples_{galaxy_type}'].split(',')]
+
+
+def get_c3_redshift_ranges(galaxy_type, config):
+    """[(sample, zmin, zmax), ...] for a c3 galaxy_type, with the ranges taken
+    from DESI_Y3_x_CMB's own sample definitions (spec: galaxy_sample_defs.yaml,
+    photo: photo_sample_config.yaml) rather than repeated in our configs."""
+    import_desi_y3_x_cmb()
+    from DESI_Y3_x_CMB.auxiliary.sample_enums import GALAXY_SAMPLE
+    if galaxy_type in ("BGS_phot", "LRG_phot"):
+        from DESI_Y3_x_CMB.measurement_pipeline.samples.photo_sample import PhotoSample as SampleClass
+    else:
+        from DESI_Y3_x_CMB.measurement_pipeline.samples.spec_sample import SpecSample as SampleClass
+    ranges = []
+    for name in get_c3_sample_names(galaxy_type, config):
+        zmin, zmax = SampleClass(GALAXY_SAMPLE.get(name)).redshift_range
+        ranges.append((name, float(zmin), float(zmax)))
+    return ranges
+
+
+def read_c3_spec_catalog(galaxy_type, config, columns, tabulatedbool=False):
+    """Load a spectroscopic sample from the exact per-cap clustering files the
+    DESI_Y3_x_CMB (c3 CMB) pipeline uses -- Gerrit's scratch copies, with the
+    per-sample override (ELG -> ELG_NNweights, the alternative completeness
+    weights) -- via SpecSample's own path logic. Photometric-cut columns the
+    per-cap files lack come from the official v2 full_HPmapcut file."""
+    import_desi_y3_x_cmb()
+    from DESI_Y3_x_CMB.auxiliary.sample_enums import GALAXY_SAMPLE
+    from DESI_Y3_x_CMB.measurement_pipeline.samples.spec_sample import SpecSample
+    # all c3 samples of one galaxy_type (e.g. LRG1-3) share the same catalog files
+    spec_sample = SpecSample(GALAXY_SAMPLE.get(get_c3_sample_names(galaxy_type, config)[0]))
+    cap_files = {cap: spec_sample.get_catalog_filename(cap) for cap in ["NGC", "SGC"]}
+    full_hpmapcut_fname = (config['general']['full_lss_path'] + os.sep + config['general']['version'] + os.sep
+                           + f"{galaxy_type}_full_HPmapcut.dat.fits")
+    return read_table_percap(cap_files, full_hpmapcut_fname, columns, tabulatedbool=tabulatedbool,
+                             bright=galaxy_type.startswith("BGS"), add_galactic_cap=True,
+                             label=f"{galaxy_type} DESI_Y3_x_CMB")
 
 
 def join_real_imaging_weight(gal_tab, weight_path):
@@ -344,33 +422,32 @@ def join_real_imaging_weight(gal_tab, weight_path):
     return gal_tab
 
 
-def load_photo_data(galaxy_type, columns, region_name='des'):
-    """Load photometric galaxy data using the DESI_Y3_x_CMB PhotoSample loader.
+def load_photo_data(galaxy_type, columns, region_name='all'):
+    """Load photometric galaxy data from DESI_Y3_x_CMB's prepared PhotoSample
+    catalogs (Gerrit's photo_galaxy_sample_data/ files).
 
     Parameters
     ----------
     galaxy_type : str
-        Galaxy type identifier (e.g., 'BGS_phot')
+        'BGS_phot' (BGS) or 'LRG_phot' (LRG1+LRG2+LRG3, vstacked)
     columns : list of str
-        Columns to load from the photometric catalog
+        Columns to load from the raw photometric target files (fluxes etc.
+        needed to re-apply the selection under lensing)
     region_name : str, optional
-        Imaging region: 'des', 'north', 'south', or 'des_photo-only' (default: 'des')
+        DESI_Y3_x_CMB photo region to load (default 'all'; the c3 driver
+        loads 'all' once and applies the region selectors itself)
 
     Returns
     -------
     astropy.table.Table
-        Filtered photometric catalog
+        Every derived column of the prepared catalog (incl. Z_PHOT_MEDIAN,
+        GALACTIC_CAP, Z_WEIGHT, KERNEL_WEIGHT_KAPPA, WEIGHT_IMLIN), joined by
+        TARGETID with the requested raw columns
     """
-    import sys
-    _repo_root = os.path.dirname(os.path.abspath(__file__))
-    _default = os.path.join(_repo_root, '..', 'DESI_Y3_x_CMB')
-    _desi_y3_root = os.environ.get('DESI_Y3_X_CMB_PATH', _default)
-    scripts_path = os.path.join(_desi_y3_root, 'scripts')
-    for _p in [scripts_path, _desi_y3_root]:
-        if _p not in sys.path:
-            sys.path.insert(0, _p)
-
-    from DR2_analysis_utils import get_photo_sample_obj
+    import_desi_y3_x_cmb()
+    from DESI_Y3_x_CMB.measurement_pipeline.sample_factory import get_photo_sample_obj
+    from DESI_Y3_x_CMB.measurement_pipeline.samples.photo_sample import PhotoSample
+    from DESI_Y3_x_CMB.auxiliary.sample_enums import GALAXY_SAMPLE
 
     sample_map = {
         'BGS_phot': ['BGS'],
@@ -379,40 +456,31 @@ def load_photo_data(galaxy_type, columns, region_name='des'):
     if galaxy_type not in sample_map:
         raise ValueError(f"Photometric galaxy_type '{galaxy_type}' not recognized. Available: {list(sample_map.keys())}")
 
-    from DESI_Y3_x_CMB.measurement_pipeline.samples.photo_sample import PhotoSample
-    from DESI_Y3_x_CMB.auxiliary.sample_enums import GALAXY_SAMPLE
-
-    sample_names = sample_map[galaxy_type]
-    # Columns only available in the raw FITS files, not in the saved derived data
-    raw_only_columns = columns.copy()
-
     tables = []
-    for sample_idx, sample_name in enumerate(sample_names):
-        # Load processed/derived catalog (includes region subselection)
+    for sample_name in sample_map[galaxy_type]:
+        # Load processed/derived catalog (includes region subselection and the
+        # Z_WEIGHT / KERNEL_WEIGHT_KAPPA / WEIGHT_IMLIN weight columns)
         photo_sample = get_photo_sample_obj(sample_name, region_name=region_name, new=False)
+        print(f"Loading {sample_name} ({region_name}) from {photo_sample._get_derived_data_filename()}")
         photo_sample.load_data()
-        col_names = photo_sample.columns + ['WEIGHT_IMLIN']
+        col_names = list(photo_sample.columns)
         part = Table()
         for col in col_names:
             part[col] = photo_sample.get_cat_attrs(col)
 
         # Load raw-only columns via load_raw_data and join on TARGETID
         raw_sample = PhotoSample(GALAXY_SAMPLE[sample_name])
-        raw_sample.load_raw_data(columns=raw_only_columns)  # LRG photometric redshifts are not available, hard-coded for z-cuts
-        raw_col_names = raw_sample.columns
+        raw_sample.load_raw_data(columns=list(columns))  # LRG photometric redshifts are not available, hard-coded for z-cuts
         raw_part = Table()
-        for col in raw_col_names:
-            if col=='TARGETID' or not col in col_names: #avoid duplicates except TARGETID, by which we join
+        for col in raw_sample.columns:
+            if col == 'TARGETID' or col not in col_names:  # avoid duplicates except TARGETID, by which we join
                 raw_part[col] = raw_sample.get_cat_attrs(col)
 
         lpart = len(part)
         part = join(part, raw_part, keys='TARGETID', join_type='inner')
         assert lpart == len(part), f"Join on TARGETID resulted in length change: {lpart} vs {len(part)}"
         tables.append(part)
-    data = vstack(tables) if len(tables) > 1 else tables[0]
-    # if 'Z_PHOT_MEDIAN' in data.columns and 'Z' not in data.columns:
-        # data.rename_column('Z_PHOT_MEDIAN', 'Z')
-    return data
+    return vstack(tables) if len(tables) > 1 else tables[0]
 
 
 def is_table_masked(table):
