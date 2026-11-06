@@ -72,7 +72,7 @@ for galaxy_type in galaxy_types:
             
             # Initialize storage for this region if needed
             if region not in simple_alphas[galaxy_type]:
-                simple_alphas[galaxy_type][region] = {'alphas': [], 'errors': []}
+                simple_alphas[galaxy_type][region] = {'alphas': [], 'errors': [], 'z_eff': [], 'N_galaxies': []}
                 alphas[galaxy_type][region] = []
                 if config.getboolean('general','apply_individual_cuts'):
                     alphas_individual_cuts[galaxy_type][region] = {}
@@ -85,6 +85,10 @@ for galaxy_type in galaxy_types:
             
             simple_alphas[galaxy_type][region]['alphas'].append(alpha_simple)
             simple_alphas[galaxy_type][region]['errors'].append(alpha_simple_err)
+            # per-bin effective redshift (same weights as alpha) and count, for plotting s(z)
+            w_region = np.asarray(magnification_bias_DESI.get_weights(weights_str, galcat_region, galaxy_type), dtype=float)
+            simple_alphas[galaxy_type][region]['z_eff'].append(float(np.average(galcat_region['Z'], weights=w_region)))
+            simple_alphas[galaxy_type][region]['N_galaxies'].append(len(galcat_region))
             
             # Individual cuts if requested
             if config.getboolean('general','apply_individual_cuts'):
@@ -138,7 +142,10 @@ if do_full_alpha_stepwise_calculation:
                     'alphas': [alphas[galaxy_type][region][i]['fit']['alpha_fit'] 
                               for i in range(len(alphas[galaxy_type][region]))],
                     'alphas_error': [alphas[galaxy_type][region][i]['fit']['alpha_fit_error'] 
-                                    for i in range(len(alphas[galaxy_type][region]))]
+                                    for i in range(len(alphas[galaxy_type][region]))],
+                    'z_eff': simple_alphas[galaxy_type][region]['z_eff'],
+                    'N_galaxies': simple_alphas[galaxy_type][region]['N_galaxies'],
+                    'zbins': z_bins,
                 }
 
     save_dict_to_hdf5(outpath + out_fname, relevant_results)
